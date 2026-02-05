@@ -449,12 +449,14 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Evidence pointer resolution check (path exists + phrase present): PASS
   - Post PHASE_3: PASS
   - Post doc alignment: PASS
+  - Post PHASE_4: PASS (`python -c` evidence pointer resolution check)
 
 ### CHK-NO-ADHOC-FILES
 - status: DONE
 - evidence:
   - Manual review: repo contains expected SSOT spine + `crates/` implementation scaffold + `checks/` tooling + `.github/` CI.
   - Ephemeral outputs (e.g., `target/`) are excluded from the manifest generator and ignored via `.gitignore`.
+  - Post PHASE_4: PASS (`git ls-files --others --exclude-standard` is empty)
 
 ### CHK-QAC-COVERAGE
 - status: TODO

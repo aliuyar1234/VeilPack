@@ -26,11 +26,11 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 | T-0202 | PHASE_2_POLICY_BUNDLE | DONE |
 | T-0203 | PHASE_2_POLICY_BUNDLE | DONE |
 | T-0204 | PHASE_2_POLICY_BUNDLE | DONE |
-| T-0301 | PHASE_3_EVIDENCE_AND_AUDIT | TODO |
-| T-0302 | PHASE_3_EVIDENCE_AND_AUDIT | TODO |
-| T-0303 | PHASE_3_EVIDENCE_AND_AUDIT | TODO |
-| T-0304 | PHASE_3_EVIDENCE_AND_AUDIT | TODO |
-| T-0305 | PHASE_3_EVIDENCE_AND_AUDIT | TODO |
+| T-0301 | PHASE_3_EVIDENCE_AND_AUDIT | DONE |
+| T-0302 | PHASE_3_EVIDENCE_AND_AUDIT | DONE |
+| T-0303 | PHASE_3_EVIDENCE_AND_AUDIT | DONE |
+| T-0304 | PHASE_3_EVIDENCE_AND_AUDIT | DONE |
+| T-0305 | PHASE_3_EVIDENCE_AND_AUDIT | DONE |
 | T-0401 | PHASE_4_FORMATS_AND_LIMITS | TODO |
 | T-0402 | PHASE_4_FORMATS_AND_LIMITS | TODO |
 | T-0403 | PHASE_4_FORMATS_AND_LIMITS | TODO |
@@ -225,24 +225,46 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
     - `cargo test -p veil-cli --test phase1_gates` PASS
 
 ### T-0301
-- status: TODO
+- status: DONE
 - evidence:
+  - Evidence bundle writer implemented:
+    - `evidence/run_manifest.json`
+    - `evidence/artifacts.ndjson`
+  - Evidence safety regression tests:
+    - `cargo test -p veil-cli --test phase1_gates` PASS (canary string absent from logs/evidence/quarantine index + sanitized)
 
 ### T-0302
-- status: TODO
+- status: DONE
 - evidence:
+  - Quarantine index writer implemented: `quarantine/index.ndjson` (non-sensitive).
+  - Default no-raw quarantine policy enforced:
+    - `cargo test -p veil-cli --test cli_smoke` PASS (no `quarantine/raw/` by default)
+  - Raw quarantine copying is explicit opt-in and contained:
+    - `cargo test -p veil-cli --test phase3_gates` PASS (copies appear only under `quarantine/raw/` when enabled)
 
 ### T-0303
-- status: TODO
+- status: DONE
 - evidence:
+  - Pack manifest writer implemented:
+    - `pack_manifest.json` includes required identity + schema version fields and is written last (no timestamps).
+  - `cargo test -p veil-cli --test phase1_gates` PASS (deterministic pack snapshot includes pack_manifest.json)
+  - `cargo test -p veil-cli --test phase3_gates` PASS (pack_manifest includes schema versions; verify enforces them)
 
 ### T-0304
-- status: TODO
+- status: DONE
 - evidence:
+  - `veil verify` rescans VERIFIED outputs and fails on residual HIGH findings:
+    - `cargo test -p veil-cli --test phase1_gates` PASS (verify catches tampered VERIFIED output)
+  - Verify refuses unsupported pack/ledger schema versions:
+    - `cargo test -p veil-cli --test phase3_gates` PASS
 
 ### T-0305
-- status: TODO
+- status: DONE
 - evidence:
+  - Proof tokens emitted as digest-only evidence and never plaintext:
+    - `cargo test -p veil-cli --test phase3_gates` PASS (proof_tokens are 12-hex digests; plaintext value absent from artifacts.ndjson)
+  - Proof token binding decision logged:
+    - evidence: DECISIONS.md :: ## D-0016 — Proof token emission binding (v1)
 
 ### T-0401
 - status: TODO
@@ -316,10 +338,13 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
     - tokenization disabled by default
     - enabling tokenization without key fails to start
     - evidence includes `proof_key_commitment` only; secret key is never persisted
+  - `cargo test -p veil-cli --test phase3_gates` PASS (proof_tokens are digest-only; no plaintext values)
 
 ### G-SEC-QUARANTINE-NO-RAW-DEFAULT
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test cli_smoke` PASS (no `quarantine/raw/` by default)
+  - `cargo test -p veil-cli --test phase3_gates` PASS (opt-in raw copying only under `quarantine/raw/`)
 
 ### G-REL-LEDGER-RESUME
 - status: TODO
@@ -358,8 +383,9 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
 
 ### G-COMP-PACK-COMPAT
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase3_gates` PASS (verify refuses unsupported pack_schema_version and ledger_schema_version)
 
 ### G-COMP-CONTRACT-CONSISTENCY
 - status: TODO
@@ -374,6 +400,8 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Regenerate: `python checks/generate_manifest.py`
   - Verify (CHK-MANIFEST-VERIFY): PASS
   - Regenerate: `python checks/generate_manifest.py` (post changes)
+  - Verify (CHK-MANIFEST-VERIFY): PASS
+  - Regenerate: `python checks/generate_manifest.py` (post PHASE_3 changes)
   - Verify (CHK-MANIFEST-VERIFY): PASS
 
 ### CHK-FORBIDDEN-TERMS
@@ -398,12 +426,14 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
   - PASS
   - `python -c` (see `checks/CHECKS_INDEX.md` CHK-EVIDENCE-POINTER-FORMAT) PASS
+  - Post PHASE_3: PASS
 
 ### CHK-REF-INTEGRITY
 - status: DONE
 - evidence:
   - PASS (evidence pointers resolve; referenced IDs exist)
   - Evidence pointer resolution check (path exists + phrase present): PASS
+  - Post PHASE_3: PASS
 
 ### CHK-NO-ADHOC-FILES
 - status: DONE
@@ -502,3 +532,4 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - 2026-02-05: PHASE_1 baseline started (pack layout v1 output + resumability ledger/resume + pack schema version decision).
 - 2026-02-05: PHASE_1 core pipeline completed (extract/detect/transform/residual verify + atomic commit + determinism + canary tests).
 - 2026-02-05: PHASE_2 policy bundle completed (policy lint + immutability + key-handling gate tests).
+- 2026-02-05: PHASE_3 evidence and audit completed (proof tokens + pack compatibility tests).

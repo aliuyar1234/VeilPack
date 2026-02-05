@@ -96,6 +96,9 @@ The output directory of `veil run` is the Veil Pack root.
 - Evidence MUST never contain plaintext sensitive values.
 evidence: CONSTITUTION.md :: C-003 No plaintext sensitive values in logs/reports/evidence
 
+Evidence proof tokens (non-sensitive correlation aids):
+evidence: DECISIONS.md :: ## D-0016 — Proof token emission binding (v1)
+
 ### Sanitized output path mapping (v1 baseline)
 To avoid plaintext path leakage in the pack, v1 baseline uses only digests for sanitized output names:
 - `sanitized/<source_locator_hash>__<artifact_id>.<ext>`

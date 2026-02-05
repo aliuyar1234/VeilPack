@@ -94,7 +94,7 @@ evidence: PROGRESS.md :: G-SEC-VERIFY-RESIDUAL
 - Verify:
   - Tokenization disabled by default.
   - Enabling tokenization without a key fails to start.
-  - Evidence contains key commitment only; never the key.
+  - Proof tokens are digests only; evidence contains key commitment only; never the key.
 - Pass/fail:
   - PASS if invariants hold and tests enforce them.
 - Evidence:

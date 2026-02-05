@@ -4,6 +4,8 @@ use veil_domain::{Digest32, Severity};
 use veil_extract::{CanonicalArtifact, CanonicalCsv, CanonicalJson, CanonicalNdjson, CanonicalText};
 use veil_policy::{CompiledDetector, FieldSelectorKind, Policy, PolicyClass};
 
+const PROOF_TOKEN_DOMAIN: &[u8] = b"veil.proof.v1";
+
 #[derive(Debug, Clone)]
 pub struct Finding {
     pub class_id: String,
@@ -18,24 +20,34 @@ pub enum FindingLocation {
 }
 
 pub trait DetectorEngine {
-    fn detect(&self, policy: &Policy, canonical: &CanonicalArtifact) -> Vec<Finding>;
+    fn detect(
+        &self,
+        policy: &Policy,
+        canonical: &CanonicalArtifact,
+        proof_key: Option<&[u8; 32]>,
+    ) -> Vec<Finding>;
 }
 
 #[derive(Debug, Default)]
 pub struct DetectorEngineV1;
 
 impl DetectorEngine for DetectorEngineV1 {
-    fn detect(&self, policy: &Policy, canonical: &CanonicalArtifact) -> Vec<Finding> {
+    fn detect(
+        &self,
+        policy: &Policy,
+        canonical: &CanonicalArtifact,
+        proof_key: Option<&[u8; 32]>,
+    ) -> Vec<Finding> {
         match canonical {
-            CanonicalArtifact::Text(t) => detect_text(policy, t),
-            CanonicalArtifact::Csv(c) => detect_csv(policy, c),
-            CanonicalArtifact::Json(j) => detect_json(policy, j),
-            CanonicalArtifact::Ndjson(n) => detect_ndjson(policy, n),
+            CanonicalArtifact::Text(t) => detect_text(policy, t, proof_key),
+            CanonicalArtifact::Csv(c) => detect_csv(policy, c, proof_key),
+            CanonicalArtifact::Json(j) => detect_json(policy, j, proof_key),
+            CanonicalArtifact::Ndjson(n) => detect_ndjson(policy, n, proof_key),
         }
     }
 }
 
-fn detect_text(policy: &Policy, t: &CanonicalText) -> Vec<Finding> {
+fn detect_text(policy: &Policy, t: &CanonicalText, proof_key: Option<&[u8; 32]>) -> Vec<Finding> {
     let mut out = Vec::new();
     let text = t.as_str();
     for class in policy.classes.iter() {
@@ -43,13 +55,14 @@ fn detect_text(policy: &Policy, t: &CanonicalText) -> Vec<Finding> {
             class,
             text,
             &format!("text:{}", class.class_id),
+            proof_key,
             &mut out,
         );
     }
     out
 }
 
-fn detect_csv(policy: &Policy, c: &CanonicalCsv) -> Vec<Finding> {
+fn detect_csv(policy: &Policy, c: &CanonicalCsv, proof_key: Option<&[u8; 32]>) -> Vec<Finding> {
     let mut out = Vec::new();
     let selected_cols_by_class = build_csv_selection(policy, c);
 
@@ -68,6 +81,7 @@ fn detect_csv(policy: &Policy, c: &CanonicalCsv) -> Vec<Finding> {
                 class,
                 header,
                 &format!("csv:header:c{col_idx}:{}", class.class_id),
+                proof_key,
                 &mut out,
             );
         }
@@ -89,6 +103,7 @@ fn detect_csv(policy: &Policy, c: &CanonicalCsv) -> Vec<Finding> {
                     class,
                     cell,
                     &format!("csv:r{row_idx}:c{col_idx}:{}", class.class_id),
+                    proof_key,
                     &mut out,
                 );
             }
@@ -125,7 +140,7 @@ fn build_csv_selection(policy: &Policy, c: &CanonicalCsv) -> std::collections::B
     by_class
 }
 
-fn detect_json(policy: &Policy, j: &CanonicalJson) -> Vec<Finding> {
+fn detect_json(policy: &Policy, j: &CanonicalJson, proof_key: Option<&[u8; 32]>) -> Vec<Finding> {
     let mut out = Vec::new();
     let selected_by_class = build_json_selection(policy);
 
@@ -136,6 +151,7 @@ fn detect_json(policy: &Policy, j: &CanonicalJson) -> Vec<Finding> {
         &selected_by_class,
         &mut pointer,
         &j.value,
+        proof_key,
         &mut out,
     );
     out
@@ -165,6 +181,7 @@ fn walk_json(
     selected_by_class: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     pointer: &mut String,
     value: &Value,
+    proof_key: Option<&[u8; 32]>,
     out: &mut Vec<Finding>,
 ) {
     match value {
@@ -190,6 +207,7 @@ fn walk_json(
                             hash_locator(&key_pointer),
                             class.class_id
                         ),
+                        proof_key,
                         out,
                     );
                 }
@@ -198,7 +216,7 @@ fn walk_json(
                 pointer.push('/');
                 pointer.push_str(&escaped);
 
-                walk_json(kind, policy, selected_by_class, pointer, v, out);
+                walk_json(kind, policy, selected_by_class, pointer, v, proof_key, out);
                 pointer.truncate(old_len);
             }
         }
@@ -207,7 +225,7 @@ fn walk_json(
                 let old_len = pointer.len();
                 pointer.push('/');
                 pointer.push_str(&idx.to_string());
-                walk_json(kind, policy, selected_by_class, pointer, item, out);
+                walk_json(kind, policy, selected_by_class, pointer, item, proof_key, out);
                 pointer.truncate(old_len);
             }
         }
@@ -227,6 +245,7 @@ fn walk_json(
                         hash_locator(pointer),
                         class.class_id
                     ),
+                    proof_key,
                     out,
                 );
             }
@@ -235,7 +254,11 @@ fn walk_json(
     }
 }
 
-fn detect_ndjson(policy: &Policy, n: &CanonicalNdjson) -> Vec<Finding> {
+fn detect_ndjson(
+    policy: &Policy,
+    n: &CanonicalNdjson,
+    proof_key: Option<&[u8; 32]>,
+) -> Vec<Finding> {
     let mut out = Vec::new();
     let selected_by_class = build_json_selection(policy);
 
@@ -248,6 +271,7 @@ fn detect_ndjson(policy: &Policy, n: &CanonicalNdjson) -> Vec<Finding> {
             &selected_by_class,
             &mut pointer,
             v,
+            proof_key,
             &mut out,
         );
     }
@@ -255,35 +279,61 @@ fn detect_ndjson(policy: &Policy, n: &CanonicalNdjson) -> Vec<Finding> {
     out
 }
 
-fn detect_in_str(class: &PolicyClass, s: &str, base: &str, out: &mut Vec<Finding>) {
+fn detect_in_str(
+    class: &PolicyClass,
+    s: &str,
+    base: &str,
+    proof_key: Option<&[u8; 32]>,
+    out: &mut Vec<Finding>,
+) {
     for det in class.detectors.iter() {
         match det {
             CompiledDetector::Regex(re) => {
                 for m in re.find_iter(s) {
+                    let proof_token = proof_key.map(|k| compute_proof_token(k, m.as_str().as_bytes()));
                     out.push(Finding {
                         class_id: class.class_id.clone(),
                         severity: class.severity,
                         location: FindingLocation::Opaque {
                             locator: format!("{base}:b{}:{}", m.start(), m.end()),
                         },
-                        proof_token: None,
+                        proof_token,
                     });
                 }
             }
             CompiledDetector::ChecksumLuhn => {
                 for (start, end) in find_luhn_matches(s) {
+                    let digits = digits_only(&s[start..end]);
+                    let proof_token = proof_key.map(|k| compute_proof_token(k, &digits));
                     out.push(Finding {
                         class_id: class.class_id.clone(),
                         severity: class.severity,
                         location: FindingLocation::Opaque {
                             locator: format!("{base}:b{start}:{end}"),
                         },
-                        proof_token: None,
+                        proof_token,
                     });
                 }
             }
         }
     }
+}
+
+fn digits_only(span: &str) -> Vec<u8> {
+    span.as_bytes()
+        .iter()
+        .copied()
+        .filter(|b| b.is_ascii_digit())
+        .collect::<Vec<_>>()
+}
+
+fn compute_proof_token(key: &[u8; 32], value: &[u8]) -> String {
+    let mut hasher = blake3::Hasher::new_keyed(key);
+    hasher.update(PROOF_TOKEN_DOMAIN);
+    hasher.update(value);
+    let digest = hasher.finalize();
+    let hex = digest.to_hex().to_string();
+    hex[..12].to_string()
 }
 
 fn find_luhn_matches(s: &str) -> Vec<(usize, usize)> {

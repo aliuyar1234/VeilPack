@@ -50,6 +50,9 @@ flowchart LR
 | Evidence Builder | emit non-sensitive evidence and manifests; bind to policy_id and run_id | store plaintext sensitive values |
 | Ledger | persist resumability state machine; record non-sensitive metadata | store plaintext sensitive values |
 
+Evidence proof tokens (optional, non-sensitive correlation aids):
+evidence: DECISIONS.md :: ## D-0016 — Proof token emission binding (v1)
+
 ## Pipeline invariants (fail-closed)
 - Every artifact MUST end VERIFIED or QUARANTINED.
 - VERIFIED implies:

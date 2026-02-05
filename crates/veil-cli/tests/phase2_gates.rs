@@ -79,8 +79,8 @@ struct RunManifestRead {
     tokenization_enabled: bool,
     #[serde(default)]
     tokenization_scope: Option<String>,
-    #[serde(default)]
-    proof_key_commitment: Option<String>,
+    proof_scope: String,
+    proof_key_commitment: String,
 }
 
 #[test]
@@ -282,7 +282,8 @@ fn run_tokenization_is_disabled_by_default() {
         serde_json::from_str(&run_manifest_json).expect("parse run_manifest");
     assert!(!run_manifest.tokenization_enabled);
     assert!(run_manifest.tokenization_scope.is_none());
-    assert!(run_manifest.proof_key_commitment.is_none());
+    assert_eq!(run_manifest.proof_scope, "PER_RUN");
+    assert!(!run_manifest.proof_key_commitment.trim().is_empty());
 }
 
 #[test]
@@ -337,7 +338,6 @@ fn run_never_persists_secret_key_plaintext() {
         serde_json::from_str(&run_manifest_json).expect("parse run_manifest");
     assert!(run_manifest.tokenization_enabled);
     assert_eq!(run_manifest.tokenization_scope.as_deref(), Some("PER_RUN"));
-    assert!(
-        run_manifest.proof_key_commitment.as_ref().is_some_and(|c| !c.trim().is_empty())
-    );
+    assert_eq!(run_manifest.proof_scope, "PER_RUN");
+    assert!(!run_manifest.proof_key_commitment.trim().is_empty());
 }

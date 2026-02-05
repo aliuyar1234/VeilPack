@@ -26,7 +26,7 @@ fn luhn_detector_finds_candidate_in_text() {
         "card 4111-1111-1111-1111".to_string(),
     ));
 
-    let findings = DetectorEngineV1.detect(&policy, &canonical);
+    let findings = DetectorEngineV1.detect(&policy, &canonical, None);
     assert!(!findings.is_empty());
     assert!(findings.iter().any(|f| f.class_id == "PCI.Card"));
 }
@@ -54,7 +54,7 @@ fn json_pointer_selector_limits_scanning() {
         }),
     });
 
-    let findings = DetectorEngineV1.detect(&policy, &canonical);
+    let findings = DetectorEngineV1.detect(&policy, &canonical, None);
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].class_id, "PII.Email");
 }
@@ -81,8 +81,7 @@ fn csv_header_selector_limits_scanning() {
         records: vec![vec!["a@b.com".to_string(), "a@b.com".to_string()]],
     });
 
-    let findings = DetectorEngineV1.detect(&policy, &canonical);
+    let findings = DetectorEngineV1.detect(&policy, &canonical, None);
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].class_id, "PII.Email");
 }
-

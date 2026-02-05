@@ -40,3 +40,8 @@
 - Implemented `veil policy lint` (strict validation + prints policy_id).
 - Enforced policy_id immutability across resume and verify with integration tests.
 - Hardened key-handling evidence: run manifest records `proof_key_commitment` (BLAKE3 of key) and tokenization scope when enabled, without persisting the secret key.
+
+### Evidence and audit (PHASE_3 completed)
+- Added pack compatibility tests and enforcement (`veil verify` refuses unsupported pack/ledger schema versions).
+- Implemented proof token emission (digest-only correlation tokens in `artifacts.ndjson`) with key commitment metadata in `run_manifest.json` (D-0016).
+- Added quarantine raw-copy opt-in tests (`quarantine/raw/` created only when explicitly enabled).

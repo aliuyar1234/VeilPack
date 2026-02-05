@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -70,28 +70,6 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         return exit_usage(exe, &msg, print_run_help);
     }
 
-    let proof_key_commitment = if parsed.enable_tokenization {
-        let key_path = match parsed.secret_key_file.as_ref() {
-            Some(p) => p,
-            None => {
-                return exit_usage(
-                    exe,
-                    "--enable-tokenization true requires --secret-key-file",
-                    print_run_help,
-                );
-            }
-        };
-        let bytes = match std::fs::read(key_path) {
-            Ok(b) => b,
-            Err(_) => {
-                return exit_usage(exe, "secret-key-file is unreadable (redacted)", print_run_help);
-            }
-        };
-        Some(blake3::hash(&bytes).to_hex().to_string())
-    } else {
-        None
-    };
-
     let policy = match veil_policy::load_policy_bundle(&parsed.policy) {
         Ok(p) => p,
         Err(_) => {
@@ -110,13 +88,17 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         .unwrap_or_else(|| parsed.output.join(".veil_work"));
     let marker_path = workdir.join("in_progress.marker");
 
-    let artifacts = match enumerate_input_corpus(&parsed.input) {
+    let enumerated = match enumerate_input_corpus(&parsed.input) {
         Ok(a) => a,
         Err(msg) => {
             eprintln!("error: {msg}");
             return ExitCode::from(EXIT_FATAL);
         }
     };
+    let EnumeratedCorpus {
+        artifacts,
+        corpus_secret,
+    } = enumerated;
 
     let mut sort_keys = artifacts
         .iter()
@@ -124,6 +106,30 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         .collect::<Vec<veil_domain::ArtifactSortKey>>();
     let input_corpus_id = veil_domain::compute_input_corpus_id(&mut sort_keys);
     let run_id = veil_domain::compute_run_id(TOOL_VERSION, &policy_id, &input_corpus_id);
+
+    let proof_root_secret = if parsed.enable_tokenization {
+        let key_path = match parsed.secret_key_file.as_ref() {
+            Some(p) => p,
+            None => {
+                return exit_usage(
+                    exe,
+                    "--enable-tokenization true requires --secret-key-file",
+                    print_run_help,
+                );
+            }
+        };
+        match std::fs::read(key_path) {
+            Ok(b) => b,
+            Err(_) => {
+                return exit_usage(exe, "secret-key-file is unreadable (redacted)", print_run_help);
+            }
+        }
+    } else {
+        corpus_secret.to_vec()
+    };
+    let proof_key = derive_proof_key(&proof_root_secret, &run_id);
+    let proof_key_commitment = blake3::hash(&proof_key).to_hex().to_string();
+    let proof_scope = veil_domain::TokenizationScope::PerRun.as_str();
 
     let policy_id_str = policy_id.to_string();
     let input_corpus_id_str = input_corpus_id.to_string();
@@ -273,6 +279,16 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
     let detector = veil_detect::DetectorEngineV1::default();
     let transformer = veil_transform::TransformerV1::default();
 
+    let mut proof_tokens_by_artifact = BTreeMap::<veil_domain::ArtifactId, Vec<String>>::new();
+    if is_resume {
+        match load_existing_proof_tokens(&artifacts_ndjson_path) {
+            Ok(m) => proof_tokens_by_artifact = m,
+            Err(_) => {
+                eprintln!("warn: could not load existing proof tokens (redacted)");
+            }
+        }
+    }
+
     for artifact in artifacts.iter() {
         if ledger
             .upsert_discovered(
@@ -301,6 +317,8 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         if state.is_terminal() {
             continue;
         }
+
+        proof_tokens_by_artifact.remove(&artifact.sort_key.artifact_id);
 
         let bytes = match std::fs::read(&artifact.path) {
             Ok(b) => b,
@@ -379,7 +397,11 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             return ExitCode::from(EXIT_FATAL);
         }
 
-        let findings = detector.detect(&policy, &canonical);
+        let findings = detector.detect(&policy, &canonical, Some(&proof_key));
+        proof_tokens_by_artifact.insert(
+            artifact.sort_key.artifact_id,
+            collect_proof_tokens(&findings),
+        );
         if ledger
             .replace_findings_summary(
                 &artifact.sort_key.artifact_id,
@@ -444,7 +466,7 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             }
         };
 
-        let findings_out = detector.detect(&policy, &canonical_out);
+        let findings_out = detector.detect(&policy, &canonical_out, Some(&proof_key));
         let verification = veil_verify::residual_verify(&findings_out);
         if verification != veil_verify::VerificationOutcome::Verified {
             let reason = match verification {
@@ -591,6 +613,10 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             artifact_type: artifact.artifact_type.clone(),
             state: summary.state,
             quarantine_reason_code: summary.quarantine_reason_code,
+            proof_tokens: proof_tokens_by_artifact
+                .get(&artifact.sort_key.artifact_id)
+                .cloned()
+                .unwrap_or_default(),
         });
     }
 
@@ -640,6 +666,7 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         } else {
             None
         },
+        proof_scope,
         proof_key_commitment,
         quarantine_copy_enabled: parsed.quarantine_copy,
     };
@@ -840,7 +867,7 @@ fn cmd_verify(exe: &str, args: &[String]) -> ExitCode {
             }
         };
 
-        let findings = detector.detect(&policy, &canonical);
+        let findings = detector.detect(&policy, &canonical, None);
         let verification = veil_verify::residual_verify(&findings);
         if verification != veil_verify::VerificationOutcome::Verified {
             failures += 1;
@@ -1300,6 +1327,7 @@ struct ArtifactRunResult {
     artifact_type: String,
     state: veil_domain::ArtifactState,
     quarantine_reason_code: Option<String>,
+    proof_tokens: Vec<String>,
 }
 
 fn create_pack_dirs(pack_root: &Path, quarantine_copy_enabled: bool) -> Result<(), String> {
@@ -1333,17 +1361,27 @@ fn ensure_dir_exists_or_create(path: &Path, kind: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn enumerate_input_corpus(input_root: &Path) -> Result<Vec<DiscoveredArtifact>, String> {
+struct EnumeratedCorpus {
+    artifacts: Vec<DiscoveredArtifact>,
+    corpus_secret: [u8; 32],
+}
+
+fn enumerate_input_corpus(input_root: &Path) -> Result<EnumeratedCorpus, String> {
     let mut out = Vec::new();
-    collect_input_files(input_root, input_root, &mut out)?;
+    let mut corpus_hasher = blake3::Hasher::new();
+    collect_input_files(input_root, input_root, &mut out, &mut corpus_hasher)?;
     out.sort_by(|a, b| a.sort_key.cmp(&b.sort_key));
-    Ok(out)
+    Ok(EnumeratedCorpus {
+        artifacts: out,
+        corpus_secret: *corpus_hasher.finalize().as_bytes(),
+    })
 }
 
 fn collect_input_files(
     root: &Path,
     current: &Path,
     out: &mut Vec<DiscoveredArtifact>,
+    corpus_hasher: &mut blake3::Hasher,
 ) -> Result<(), String> {
     let read_dir = std::fs::read_dir(current)
         .map_err(|_| "input corpus directory is not readable (redacted)".to_string())?;
@@ -1371,7 +1409,7 @@ fn collect_input_files(
 
         let path = entry.path();
         if file_type.is_dir() {
-            collect_input_files(root, &path, out)?;
+            collect_input_files(root, &path, out, corpus_hasher)?;
             continue;
         }
 
@@ -1386,7 +1424,16 @@ fn collect_input_files(
                 .metadata()
                 .map_err(|_| "input corpus file metadata could not be read (redacted)".to_string())?
                 .len();
-            let artifact_id = hash_file_artifact_id(&path)?;
+            let path_bytes = normalized_rel_path.as_bytes();
+            let path_len: u32 = path_bytes
+                .len()
+                .try_into()
+                .map_err(|_| "input corpus path is too long (redacted)".to_string())?;
+            corpus_hasher.update(&path_len.to_le_bytes());
+            corpus_hasher.update(path_bytes);
+            corpus_hasher.update(&size_bytes.to_le_bytes());
+
+            let artifact_id = hash_file_artifact_id_and_update(&path, corpus_hasher)?;
 
             let artifact_type = classify_artifact_type(&path);
             out.push(DiscoveredArtifact {
@@ -1428,7 +1475,10 @@ fn normalize_rel_path(rel: &Path) -> Result<String, String> {
     Ok(out)
 }
 
-fn hash_file_artifact_id(path: &Path) -> Result<veil_domain::ArtifactId, String> {
+fn hash_file_artifact_id_and_update(
+    path: &Path,
+    corpus_hasher: &mut blake3::Hasher,
+) -> Result<veil_domain::ArtifactId, String> {
     let mut file = std::fs::File::open(path)
         .map_err(|_| "input artifact is not readable (redacted)".to_string())?;
 
@@ -1442,11 +1492,22 @@ fn hash_file_artifact_id(path: &Path) -> Result<veil_domain::ArtifactId, String>
             break;
         }
         hasher.update(&buf[..n]);
+        corpus_hasher.update(&buf[..n]);
     }
 
     Ok(veil_domain::ArtifactId::from_digest(
         veil_domain::Digest32::from_bytes(*hasher.finalize().as_bytes()),
     ))
+}
+
+const PROOF_KEY_DERIVATION_DOMAIN: &[u8] = b"veil.proof.key.v1";
+
+fn derive_proof_key(root_secret: &[u8], run_id: &veil_domain::RunId) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PROOF_KEY_DERIVATION_DOMAIN);
+    hasher.update(run_id.as_digest().as_bytes());
+    hasher.update(root_secret);
+    *hasher.finalize().as_bytes()
 }
 
 fn classify_artifact_type(path: &Path) -> String {
@@ -1480,8 +1541,8 @@ struct RunManifestJsonV1 {
     tokenization_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     tokenization_scope: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    proof_key_commitment: Option<String>,
+    proof_scope: &'static str,
+    proof_key_commitment: String,
     quarantine_copy_enabled: bool,
 }
 
@@ -1575,6 +1636,8 @@ struct ArtifactEvidenceRecord<'a> {
     state: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     quarantine_reason_code: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proof_tokens: Option<&'a [String]>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1587,6 +1650,49 @@ struct ArtifactEvidenceRecordOwned {
     state: String,
     #[serde(default)]
     quarantine_reason_code: Option<String>,
+    #[serde(default)]
+    proof_tokens: Vec<String>,
+}
+
+fn collect_proof_tokens(findings: &[veil_detect::Finding]) -> Vec<String> {
+    let mut out = BTreeSet::<String>::new();
+    for f in findings {
+        if let Some(t) = &f.proof_token {
+            out.insert(t.clone());
+        }
+    }
+    out.into_iter().collect()
+}
+
+fn load_existing_proof_tokens(
+    path: &Path,
+) -> Result<BTreeMap<veil_domain::ArtifactId, Vec<String>>, String> {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(_) => return Err("could not read artifacts.ndjson (redacted)".to_string()),
+    };
+    let reader = std::io::BufReader::new(file);
+
+    let mut out = BTreeMap::<veil_domain::ArtifactId, Vec<String>>::new();
+    for line in reader.lines() {
+        let line = line
+            .map_err(|_| "could not read artifacts.ndjson line (redacted)".to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let rec: ArtifactEvidenceRecordOwned =
+            serde_json::from_str(&line).map_err(|_| "artifacts.ndjson is invalid (redacted)".to_string())?;
+
+        let artifact_id = veil_domain::ArtifactId::from_hex(&rec.artifact_id)
+            .map_err(|_| "artifacts.ndjson contains invalid artifact_id (redacted)".to_string())?;
+        if !rec.proof_tokens.is_empty() {
+            out.insert(artifact_id, rec.proof_tokens);
+        }
+    }
+
+    Ok(out)
 }
 
 fn write_artifacts_evidence(path: &Path, artifacts: &[ArtifactRunResult]) -> Result<(), String> {
@@ -1613,6 +1719,11 @@ fn write_artifacts_evidence(path: &Path, artifacts: &[ArtifactRunResult]) -> Res
             artifact_type: &a.artifact_type,
             state: a.state.as_str(),
             quarantine_reason_code: a.quarantine_reason_code.as_deref(),
+            proof_tokens: if a.proof_tokens.is_empty() {
+                None
+            } else {
+                Some(a.proof_tokens.as_slice())
+            },
         };
         let line = serde_json::to_string(&record)
             .map_err(|_| "could not serialize artifacts evidence record (redacted)".to_string())?;

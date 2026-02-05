@@ -841,3 +841,64 @@ evidence: spec/11_QUALITY_GATES.md :: G-COMP-CONTRACT-CONSISTENCY
 
 ### Fail-closed baseline behavior
 - If policy parsing/compilation fails, Veil MUST refuse to run (exit code 3) and MUST NOT process any artifact.
+
+---
+
+## D-0016 — Proof token emission binding (v1)
+
+### Decision statement
+- Veil MAY emit per-match **proof tokens** to support within-run correlation without plaintext.
+- Proof tokens are emitted as `proof_tokens` in `evidence/artifacts.ndjson` records (array of digest strings).
+- Proof token derivation (conceptual):
+  - `proof_token = TRUNC12(PRF(proof_key, domain="veil.proof.v1" || value_bytes))`
+- Proof key handling:
+  - If a `--secret-key-file` is provided (tokenization enabled), Veil MUST derive a per-run proof key from that secret key and `run_id` using domain separation `veil.proof.key.v1`.
+  - Otherwise Veil MUST derive a per-run proof key from a corpus-derived secret (hash of input paths+bytes) and `run_id` using the same domain separation.
+- Evidence MUST include, in `evidence/run_manifest.json`:
+  - `proof_scope` (v1: `PER_RUN`)
+  - `proof_key_commitment = BLAKE3(proof_key)` (never the key)
+
+### Rationale
+- Enables audit correlation (same value redacted across multiple artifacts) without disclosure.
+- Preserves determinism (D-0003): proof keys and proof tokens are deterministic functions of run inputs/config.
+- Avoids requiring operators to manage an external secret key when tokenization is disabled.
+
+### Alternatives considered
+- Random per-run proof key without persistence:
+  - rejected: breaks determinism (D-0003).
+- Unkeyed digests:
+  - rejected: enables trivial dictionary attacks over common formats.
+- Persist proof key in the pack:
+  - rejected: violates key handling invariant (D-0004).
+
+### Implications (what it affects)
+- `evidence/run_manifest.json` includes proof metadata fields (`proof_scope`, `proof_key_commitment`).
+- `evidence/artifacts.ndjson` records MAY include `proof_tokens` for artifacts with findings.
+- `veil verify` ignores proof tokens and does not require any key.
+
+### Affected files
+- spec/04_INTERFACES_AND_CONTRACTS.md (evidence and manifest notes)
+- spec/11_QUALITY_GATES.md (key handling gate coverage)
+- crates/veil-cli/src/main.rs
+- crates/veil-detect/src/lib.rs
+
+### Verification impact
+- Must exist:
+  - tests that prove `proof_tokens` are digest strings (no plaintext) and are emitted when matches occur
+  - determinism test still passes with proof fields present
+- Gates/checks:
+evidence: spec/11_QUALITY_GATES.md :: G-SEC-NO-PLAINTEXT-LEAKS
+evidence: spec/11_QUALITY_GATES.md :: G-REL-DETERMINISM
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: YES (evidence + key handling)
+- unsafe/high-risk: MEDIUM (linkage via proof tokens is scoped per-run; no plaintext)
+- conservative baseline available: YES (keyed digests; per-run scope)
+- safe to decide: YES (fully testable; proof tokens are optional evidence metadata)
+
+### Conservative baseline
+- YES (PER_RUN scope; keyed digests; no plaintext)
+
+### Fail-closed baseline behavior
+- If proof token computation fails, Veil MUST continue without emitting proof tokens rather than emitting plaintext.

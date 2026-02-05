@@ -39,7 +39,7 @@
 ### Policy bundle (PHASE_2 completed)
 - Implemented `veil policy lint` (strict validation + prints policy_id).
 - Enforced policy_id immutability across resume and verify with integration tests.
-- Hardened key-handling evidence: run manifest records `proof_key_commitment` (BLAKE3 of key) and tokenization scope when enabled, without persisting the secret key.
+- Hardened key-handling evidence metadata: run manifest records proof key commitment and tokenization scope when enabled, without persisting the secret key.
 
 ### Evidence and audit (PHASE_3 completed)
 - Added pack compatibility tests and enforcement (`veil verify` refuses unsupported pack/ledger schema versions).

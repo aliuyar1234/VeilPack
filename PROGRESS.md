@@ -403,6 +403,8 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Verify (CHK-MANIFEST-VERIFY): PASS
   - Regenerate: `python checks/generate_manifest.py` (post PHASE_3 changes)
   - Verify (CHK-MANIFEST-VERIFY): PASS
+  - Regenerate: `python checks/generate_manifest.py` (post doc alignment)
+  - Verify (CHK-MANIFEST-VERIFY): PASS
 
 ### CHK-FORBIDDEN-TERMS
 - status: DONE
@@ -427,6 +429,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - PASS
   - `python -c` (see `checks/CHECKS_INDEX.md` CHK-EVIDENCE-POINTER-FORMAT) PASS
   - Post PHASE_3: PASS
+  - Post doc alignment: PASS
 
 ### CHK-REF-INTEGRITY
 - status: DONE
@@ -434,6 +437,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - PASS (evidence pointers resolve; referenced IDs exist)
   - Evidence pointer resolution check (path exists + phrase present): PASS
   - Post PHASE_3: PASS
+  - Post doc alignment: PASS
 
 ### CHK-NO-ADHOC-FILES
 - status: DONE

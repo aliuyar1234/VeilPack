@@ -361,11 +361,11 @@ evidence: spec/11_QUALITY_GATES.md :: G-REL-ARCHIVE-LIMITS
   - `evidence/run_manifest.json` (single JSON object)
   - `evidence/artifacts.ndjson` (one record per artifact)
   - `quarantine/index.ndjson` (one record per quarantined artifact)
-- Evidence MAY include **proof tokens** for correlation within a run:
-  - `proof_token = TRUNC12(HMAC(key, value, domain="veil.proof.v1"))`
-- A per-run proof key MUST be generated in memory if no key is provided.
-  - The key MUST NOT be persisted.
-  - Evidence MUST include only a key commitment `proof_key_commitment = BLAKE3(key)` and a scope marker.
+- Evidence MAY include **proof tokens** for correlation within a run (digest-only; never plaintext).
+- Concrete proof token derivation + key binding:
+evidence: DECISIONS.md :: ## D-0016 — Proof token emission binding (v1)
+- The proof key MUST NOT be persisted.
+- Evidence MUST include only a key commitment `proof_key_commitment = BLAKE3(proof_key)` and a scope marker `proof_scope`.
 
 ### Rationale
 - Enables audit correlation (same value redacted across multiple artifacts) without disclosure.

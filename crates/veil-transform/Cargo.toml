@@ -1,0 +1,10 @@
+[package]
+name = "veil-transform"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+veil-detect = { path = "../veil-detect" }
+veil-domain = { path = "../veil-domain" }
+veil-extract = { path = "../veil-extract" }
+veil-policy = { path = "../veil-policy" }

@@ -1,0 +1,138 @@
+# spec/04_INTERFACES_AND_CONTRACTS.md
+
+## CLI Contract
+Veil is a CLI-first batch tool. The CLI is a **public contract** and MUST be versioned and stable.
+
+### Commands (v1)
+1) `veil run`
+- Purpose: process an input corpus into a Veil Pack.
+- Required flags:
+  - `--input <PATH>`: input corpus root (read-only)
+  - `--output <PATH>`: output Veil Pack root (must not exist or must be empty)
+  - `--policy <PATH>`: policy bundle directory
+- Optional flags (selected):
+  - `--workdir <PATH>`: work directory (default: `<output>/.veil_work/`)
+  - `--max-workers <N>`: concurrency bound (default: auto from CPU count; capped)
+  - `--strictness strict`: strict is the only supported baseline in v1 (fail-closed)
+  - `--enable-tokenization false|true` (default: false; see D-0004)
+  - `--secret-key-file <PATH>` (required if tokenization is true)
+  - `--quarantine-copy false|true` (default: false; see D-0005)
+  - `--limits-json <PATH>`: optional JSON file overriding resource and archive limits
+
+2) `veil verify`
+- Purpose: verify a Veil Pack output using a policy bundle.
+- Required flags:
+  - `--pack <PATH>`: Veil Pack root
+  - `--policy <PATH>`: policy bundle directory
+- Behavior:
+  - re-scan VERIFIED outputs and fail if residual HIGH-severity findings exist
+
+3) `veil policy lint`
+- Purpose: validate policy bundle schema and compute `policy_id`.
+- Required flags:
+  - `--policy <PATH>`: policy bundle directory
+- Output:
+  - prints policy_id to stdout (no sensitive values)
+
+### Exit codes (v1)
+- 0: run completed and all artifacts VERIFIED
+- 2: run completed with at least one QUARANTINED artifact (Veil Pack produced; check quarantine index)
+- 1: fatal error (no Veil Pack guarantee; must not emit partial pack as “complete”)
+- 3: invalid arguments or policy bundle invalid (no processing performed)
+
+---
+
+## Veil Pack Layout v1
+The output directory of `veil run` is the Veil Pack root.
+
+```
+<pack_root>/
+  sanitized/                      # VERIFIED outputs only
+  quarantine/
+    index.ndjson                  # non-sensitive quarantine index (always present)
+    raw/                          # present only when quarantine-copy enabled
+  evidence/
+    run_manifest.json             # run + policy binding (no timestamps)
+    artifacts.ndjson              # per-artifact evidence records (no plaintext)
+    ledger.sqlite3                # resumability ledger (no plaintext)
+  pack_manifest.json              # top-level pack identity and schema versions
+```
+
+### Pack invariants
+- `pack_manifest.json` MUST include:
+  - `pack_schema_version`
+  - `tool_version`
+  - `run_id`
+  - `policy_id`
+  - `input_corpus_id`
+  - whether tokenization enabled and scope (but never the key)
+  - whether quarantine raw copying enabled
+- `sanitized/` MUST contain only VERIFIED artifacts.
+- `quarantine/index.ndjson` MUST contain all QUARANTINED artifacts.
+- Evidence MUST never contain plaintext sensitive values.
+evidence: CONSTITUTION.md :: C-003 No plaintext sensitive values in logs/reports/evidence
+
+---
+
+## Policy Bundle Schema v1
+A policy bundle is a directory containing `policy.json` (required). `policy.json` is UTF-8 JSON.
+
+### policy.json required top-level fields
+| Field | Type | Description | Invariants |
+|---|---|---|---|
+| schema_version | string | policy schema version | MUST equal "policy.v1" |
+| classes | array | sensitive classes | MUST be non-empty |
+| defaults | object | default actions/severity | MUST exist |
+| scopes | array | where policy applies | MUST exist (may be empty = apply everywhere) |
+
+### Class entry (conceptual)
+| Field | Type | Description | Invariants |
+|---|---|---|---|
+| class_id | string | stable identifier (e.g., "PII.Email") | MUST be unique |
+| severity | string | HIGH/MEDIUM/LOW | HIGH must be verifiable (D-0008) |
+| detectors | array | detector definitions | MUST be non-empty |
+| action | object | transform action | MUST be explicit |
+
+### Detector definition (v1)
+Supported detector kinds (offline, deterministic):
+- `regex` (with bounded regex engine; catastrophic patterns rejected by lint)
+- `checksum` (e.g., Luhn-like validators where applicable)
+- `field_selector` (apply detectors only to selected structured fields)
+
+### Action definition (v1)
+- `REDACT`: replace with class marker
+- `MASK`: retain partials per configured rule
+- `DROP`: remove value/field
+- `TOKENIZE`: only permitted if tokenization enabled (D-0004)
+
+### Policy compatibility
+- policy schema changes MUST be versioned.
+- `veil policy lint` MUST refuse unknown schema_version values.
+
+---
+
+## Error model (stable)
+- Errors MUST be categorized and non-sensitive.
+- Quarantine reason codes MUST be stable:
+evidence: spec/03_DOMAIN_MODEL.md :: QuarantineReason
+
+---
+
+## Deprecation policy (public contracts)
+- CLI flags/subcommands:
+  - no breaking removals within the same major version
+  - deprecated flags MUST continue to work for at least one minor release cycle and MUST emit a non-sensitive warning
+- Veil Pack layout:
+  - any breaking layout or schema change requires `pack_schema_version` bump and a compatibility decision
+- Policy schema:
+  - any breaking schema change requires schema_version bump and migration guidance in runbook
+
+Compatibility gates:
+evidence: spec/11_QUALITY_GATES.md :: G-COMP-PACK-COMPAT
+
+---
+
+## Implementation mapping (non-normative)
+- CLI (`veil`): `crates/veil-cli`
+- Layer crates (C-101): see architecture mapping.
+evidence: spec/02_ARCHITECTURE.md :: Workspace crate mapping (normative)

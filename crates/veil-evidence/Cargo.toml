@@ -1,0 +1,8 @@
+[package]
+name = "veil-evidence"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+veil-domain = { path = "../veil-domain" }
+veil-verify = { path = "../veil-verify" }

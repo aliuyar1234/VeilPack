@@ -1,0 +1,13 @@
+[workspace]
+members = [
+  "crates/veil-domain",
+  "crates/veil-policy",
+  "crates/veil-extract",
+  "crates/veil-detect",
+  "crates/veil-transform",
+  "crates/veil-verify",
+  "crates/veil-evidence",
+  "crates/veil-cli",
+]
+resolver = "2"
+

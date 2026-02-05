@@ -34,11 +34,11 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 | T-0401 | PHASE_4_FORMATS_AND_LIMITS | DONE |
 | T-0402 | PHASE_4_FORMATS_AND_LIMITS | DONE |
 | T-0403 | PHASE_4_FORMATS_AND_LIMITS | DONE |
-| T-0501 | PHASE_5_HARDENING | TODO |
-| T-0502 | PHASE_5_HARDENING | TODO |
-| T-0503 | PHASE_5_HARDENING | TODO |
-| T-0504 | PHASE_5_HARDENING | TODO |
-| T-0505 | PHASE_5_HARDENING | TODO |
+| T-0501 | PHASE_5_HARDENING | DONE |
+| T-0502 | PHASE_5_HARDENING | DONE |
+| T-0503 | PHASE_5_HARDENING | DONE |
+| T-0504 | PHASE_5_HARDENING | DONE |
+| T-0505 | PHASE_5_HARDENING | DONE |
 
 ## Evidence Recording Rules
 
@@ -285,31 +285,46 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
     - `cargo test -p veil-cli --test phase4_gates` PASS
 
 ### T-0501
-- status: TODO
+- status: DONE
 - evidence:
+  - Perf harness implemented + baseline captured:
+    - `python checks/perf_harness.py --record-baseline` PASS (writes `checks/perf_baseline.json`)
+    - `python checks/perf_harness.py` PASS (compares against baseline)
 
 ### T-0502
-- status: TODO
+- status: DONE
 - evidence:
+  - Fuzz/property smoke for extractors and archive handling:
+    - `cargo test -p veil-extract --test fuzz_smoke` PASS
 
 ### T-0503
-- status: TODO
+- status: DONE
 - evidence:
+  - Determinism suite extended to include container formats:
+    - `cargo test -p veil-cli --test phase5_gates` PASS (determinism corpus includes ZIP/TAR/EML/MBOX/DOCX)
 
 ### T-0504
-- status: TODO
+- status: DONE
 - evidence:
+  - Key hardening:
+    - `crates/veil-cli/src/main.rs` uses `zeroize` to zeroize derived proof keys and root secrets after use.
+  - Temp hygiene and partial-output avoidance:
+    - `cargo test -p veil-cli --test phase1_gates` PASS (atomic commit; no partial files in `sanitized/`)
 
 ### T-0505
-- status: TODO
+- status: DONE
 - evidence:
+  - Release packaging + offline distribution notes added:
+    - evidence: spec/12_RUNBOOK.md :: Offline distribution (release packaging)
 
 
 ## Gate Status and Evidence
 
 ### G-SEC-OFFLINE-NO-NET
-- status: TODO
+- status: DONE
 - evidence:
+  - Static scan: `python checks/offline_enforcement.py` PASS
+  - Runtime smoke: `cargo test -p veil-cli --test offline_enforcement` PASS
 
 ### G-SEC-FAIL-CLOSED-TERMINAL
 - status: DONE
@@ -354,8 +369,10 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test -p veil-cli --test phase3_gates` PASS (opt-in raw copying only under `quarantine/raw/`)
 
 ### G-REL-LEDGER-RESUME
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase5_gates` PASS (crash simulation then resume completes)
+  - `cargo test -p veil-cli --test cli_smoke` PASS (resume refuses policy mismatch; resume succeeds with marker+ledger)
 
 ### G-REL-DETERMINISM
 - status: DONE
@@ -373,12 +390,14 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test -p veil-cli --test phase1_gates` PASS (failpoint abort after staging write; asserts `sanitized/` contains no partial files)
 
 ### G-PERF-NO-REGRESSION
-- status: TODO
+- status: DONE
 - evidence:
+  - `python checks/perf_harness.py` PASS (no regression vs `checks/perf_baseline.json`)
 
 ### G-OPS-RUNBOOK-COMPLETE
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase5_gates` PASS (runbook quickstart end-to-end: run + verify)
 
 ### G-MAINT-BOUNDARY-FITNESS
 - status: DONE
@@ -387,8 +406,10 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test -p veil-cli --test boundary_fitness` PASS
 
 ### G-MAINT-NO-GLOBAL-STATE
-- status: TODO
+- status: DONE
 - evidence:
+  - Manual review: policy/key/run context is passed explicitly; no hidden mutable singletons for critical flows.
+  - `rg "static mut|lazy_static|once_cell::sync::Lazy" crates` PASS (no matches)
 
 ### G-COMP-PACK-COMPAT
 - status: DONE
@@ -396,8 +417,9 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test -p veil-cli --test phase3_gates` PASS (verify refuses unsupported pack_schema_version and ledger_schema_version)
 
 ### G-COMP-CONTRACT-CONSISTENCY
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test contract_consistency` PASS (CLI help flags + pack layout v1 assertions)
 
 
 ## Check Status and Evidence
@@ -415,6 +437,8 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Verify (CHK-MANIFEST-VERIFY): PASS
   - Regenerate: `python checks/generate_manifest.py` (post PHASE_4 changes)
   - Verify (CHK-MANIFEST-VERIFY): PASS
+  - Regenerate: `python checks/generate_manifest.py` (post PHASE_5 changes)
+  - Verify (CHK-MANIFEST-VERIFY): PASS
 
 ### CHK-FORBIDDEN-TERMS
 - status: DONE
@@ -422,16 +446,19 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - PASS (scope excludes build artifacts per D-0010)
 
 ### CHK-CORE-FILES
-- status: TODO
+- status: DONE
 - evidence:
+  - `python checks/ssot_validate.py core-files` PASS
 
 ### CHK-FINGERPRINT-MATRIX
-- status: TODO
+- status: DONE
 - evidence:
+  - `python checks/ssot_validate.py fingerprint-matrix` PASS
 
 ### CHK-SLOP-MAPPING
-- status: TODO
+- status: DONE
 - evidence:
+  - `python checks/ssot_validate.py slop-mapping` PASS
 
 ### CHK-EVIDENCE-POINTER-FORMAT
 - status: DONE
@@ -441,6 +468,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Post PHASE_3: PASS
   - Post doc alignment: PASS
   - Post PHASE_4: PASS
+  - Post PHASE_5: PASS
 
 ### CHK-REF-INTEGRITY
 - status: DONE
@@ -450,6 +478,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Post PHASE_3: PASS
   - Post doc alignment: PASS
   - Post PHASE_4: PASS (`python -c` evidence pointer resolution check)
+  - Post PHASE_5: PASS (`python -c` evidence pointer resolution check)
 
 ### CHK-NO-ADHOC-FILES
 - status: DONE
@@ -457,10 +486,12 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Manual review: repo contains expected SSOT spine + `crates/` implementation scaffold + `checks/` tooling + `.github/` CI.
   - Ephemeral outputs (e.g., `target/`) are excluded from the manifest generator and ignored via `.gitignore`.
   - Post PHASE_4: PASS (`git ls-files --others --exclude-standard` is empty)
+  - Post PHASE_5: PASS (`git ls-files --others --exclude-standard` is empty)
 
 ### CHK-QAC-COVERAGE
-- status: TODO
+- status: DONE
 - evidence:
+  - `python checks/ssot_validate.py qac-coverage` PASS
 
 ### CHK-BOUNDARY-FITNESS
 - status: DONE
@@ -469,8 +500,10 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test --workspace` PASS (includes boundary fitness test)
 
 ### CHK-OFFLINE-ENFORCEMENT
-- status: TODO
+- status: DONE
 - evidence:
+  - `python checks/offline_enforcement.py` PASS
+  - `cargo test -p veil-cli --test offline_enforcement` PASS
 
 ### CHK-NO-PLAINTEXT-LEAKS
 - status: DONE
@@ -478,12 +511,14 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test -p veil-cli --test phase1_gates` PASS (canary regression)
 
 ### CHK-NEGATIVE-PATHS
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --tests` PASS
 
 ### CHK-CONTRACT-CONSISTENCY
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test contract_consistency` PASS
 
 ### CHK-FAIL-CLOSED-INVARIANTS
 - status: DONE
@@ -494,52 +529,77 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 ## SLOP_BLACKLIST Evidence
 
 ### SB-0001
-- status: TODO
+- status: DONE
 - evidence:
+  - Safe defaults are explicit and tested:
+    - `cargo test -p veil-cli --test phase2_gates` PASS (tokenization off by default; strict baseline only)
+    - `cargo test -p veil-cli --test phase3_gates` PASS (quarantine raw copy is opt-in only)
 
 ### SB-0002
-- status: TODO
+- status: DONE
 - evidence:
+  - Boundary enforcement prevents mega-modules:
+    - `cargo test -p veil-cli --test boundary_fitness` PASS
 
 ### SB-0003
-- status: TODO
+- status: DONE
 - evidence:
+  - Manual review: added format support uses shared helpers (limits/path normalization/record builders) rather than copy/paste forks.
 
 ### SB-0004
-- status: TODO
+- status: DONE
 - evidence:
+  - Negative paths are covered by integration suites:
+    - `cargo test -p veil-cli --tests` PASS (parse failures, unknown coverage, residual verify, archive limit violations)
 
 ### SB-0005
-- status: TODO
+- status: DONE
 - evidence:
+  - Manual review: no unbounded retries; archive expansion is bounded by D-0006 limits.
+  - Runtime smoke uses an explicit timeout guard:
+    - `cargo test -p veil-cli --test offline_enforcement` PASS
 
 ### SB-0006
-- status: TODO
+- status: DONE
 - evidence:
+  - Manual review: no hidden mutable singletons for policy/keys/run context.
+  - `rg "static mut|lazy_static|once_cell::sync::Lazy" crates` PASS (no matches)
 
 ### SB-0007
-- status: TODO
+- status: DONE
 - evidence:
+  - Manual review: glossary terms (VERIFIED/QUARANTINED/CoverageMap) remain consistent with spec/03.
 
 ### SB-0008
-- status: TODO
+- status: DONE
 - evidence:
+  - Canary regression prevents plaintext leaks:
+    - `cargo test -p veil-cli --test phase1_gates` PASS
 
 ### SB-0009
-- status: TODO
+- status: DONE
 - evidence:
+  - Contract tests enforce spec/04 alignment:
+    - `cargo test -p veil-cli --test contract_consistency` PASS
 
 ### SB-0010
-- status: TODO
+- status: DONE
 - evidence:
+  - Fail-closed invariants are enforced:
+    - `cargo test -p veil-cli --test phase1_gates` PASS (terminal states only; atomic commit; residual verify)
 
 ### SB-0011
-- status: TODO
+- status: DONE
 - evidence:
+  - New harness scripts are documented and versioned under `checks/` and runbook:
+    - evidence: checks/CHECKS_INDEX.md :: Checks Index
+    - evidence: spec/12_RUNBOOK.md :: Phase 5 harnesses (optional operator checks)
 
 ### SB-0012
-- status: TODO
+- status: DONE
 - evidence:
+  - Structural/output contract changes are logged as decisions:
+    - evidence: DECISIONS.md :: ## D-0017 — Container format canonicalization to NDJSON (v1)
 
 
 ## Session History
@@ -550,3 +610,5 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - 2026-02-05: PHASE_1 core pipeline completed (extract/detect/transform/residual verify + atomic commit + determinism + canary tests).
 - 2026-02-05: PHASE_2 policy bundle completed (policy lint + immutability + key-handling gate tests).
 - 2026-02-05: PHASE_3 evidence and audit completed (proof tokens + pack compatibility tests).
+- 2026-02-05: PHASE_4 formats and limits completed (ZIP/TAR/EML/MBOX/OOXML + limits + gates; decision D-0017).
+- 2026-02-05: PHASE_5 hardening completed (perf harness + fuzz smoke + crash+resume + contract/offline checks + runbook updates).

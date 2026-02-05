@@ -1,0 +1,11 @@
+{
+  "corpus": {
+    "bytes": 372870,
+    "files": 600
+  },
+  "elapsed_ms": 13785,
+  "profile": "release",
+  "schema_version": "perf.v1",
+  "throughput_bytes_per_sec": 27049.465853754056,
+  "tool_version": "0.1.0"
+}

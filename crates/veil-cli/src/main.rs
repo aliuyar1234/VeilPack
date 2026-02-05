@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, Zeroizing};
 use veil_detect::DetectorEngine;
 use veil_transform::Transformer;
 
@@ -20,7 +21,7 @@ fn main() -> ExitCode {
     let exe = args.first().cloned().unwrap_or_else(|| "veil".to_string());
     args.remove(0);
 
-    if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
+    if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
         print_root_help(&exe);
         return ExitCode::from(EXIT_OK);
     }
@@ -39,7 +40,7 @@ fn main() -> ExitCode {
 }
 
 fn cmd_policy(exe: &str, args: &[String]) -> ExitCode {
-    if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
+    if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
         print_policy_help(exe);
         return ExitCode::from(EXIT_OK);
     }
@@ -105,7 +106,7 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
     };
     let EnumeratedCorpus {
         artifacts,
-        corpus_secret,
+        mut corpus_secret,
     } = enumerated;
 
     let mut sort_keys = artifacts
@@ -115,28 +116,34 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
     let input_corpus_id = veil_domain::compute_input_corpus_id(&mut sort_keys);
     let run_id = veil_domain::compute_run_id(TOOL_VERSION, &policy_id, &input_corpus_id);
 
-    let proof_root_secret = if parsed.enable_tokenization {
-        let key_path = match parsed.secret_key_file.as_ref() {
-            Some(p) => p,
-            None => {
-                return exit_usage(
-                    exe,
-                    "--enable-tokenization true requires --secret-key-file",
-                    print_run_help,
-                );
-            }
+    let proof_key: Zeroizing<[u8; 32]> = {
+        let proof_root_secret: Zeroizing<Vec<u8>> = if parsed.enable_tokenization {
+            let key_path = match parsed.secret_key_file.as_ref() {
+                Some(p) => p,
+                None => {
+                    return exit_usage(
+                        exe,
+                        "--enable-tokenization true requires --secret-key-file",
+                        print_run_help,
+                    );
+                }
+            };
+            let key_bytes = match std::fs::read(key_path) {
+                Ok(b) => b,
+                Err(_) => {
+                    return exit_usage(exe, "secret-key-file is unreadable (redacted)", print_run_help);
+                }
+            };
+            Zeroizing::new(key_bytes)
+        } else {
+            Zeroizing::new(corpus_secret.to_vec())
         };
-        match std::fs::read(key_path) {
-            Ok(b) => b,
-            Err(_) => {
-                return exit_usage(exe, "secret-key-file is unreadable (redacted)", print_run_help);
-            }
-        }
-    } else {
-        corpus_secret.to_vec()
+
+        Zeroizing::new(derive_proof_key(&proof_root_secret, &run_id))
     };
-    let proof_key = derive_proof_key(&proof_root_secret, &run_id);
-    let proof_key_commitment = blake3::hash(&proof_key).to_hex().to_string();
+    corpus_secret.zeroize();
+
+    let proof_key_commitment = blake3::hash(&*proof_key).to_hex().to_string();
     let proof_scope = veil_domain::TokenizationScope::PerRun.as_str();
 
     let policy_id_str = policy_id.to_string();
@@ -297,6 +304,7 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         }
     }
 
+    let mut verified_count = 0_u64;
     for artifact in artifacts.iter() {
         if ledger
             .upsert_discovered(
@@ -405,7 +413,7 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             return ExitCode::from(EXIT_FATAL);
         }
 
-        let findings = detector.detect(&policy, &canonical, Some(&proof_key));
+        let findings = detector.detect(&policy, &canonical, Some(&*proof_key));
         proof_tokens_by_artifact.insert(
             artifact.sort_key.artifact_id,
             collect_proof_tokens(&findings),
@@ -474,7 +482,7 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             }
         };
 
-        let findings_out = detector.detect(&policy, &canonical_out, Some(&proof_key));
+        let findings_out = detector.detect(&policy, &canonical_out, Some(&*proof_key));
         let verification = veil_verify::residual_verify(&findings_out);
         if verification != veil_verify::VerificationOutcome::Verified {
             let reason = match verification {
@@ -597,6 +605,14 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             .is_err()
         {
             eprintln!("error: ledger write failed (redacted)");
+            return ExitCode::from(EXIT_FATAL);
+        }
+
+        verified_count = verified_count.saturating_add(1);
+        if verified_count == 1
+            && std::env::var("VEIL_FAILPOINT").as_deref() == Ok("after_first_verified")
+        {
+            eprintln!("error: failpoint triggered (redacted)");
             return ExitCode::from(EXIT_FATAL);
         }
     }

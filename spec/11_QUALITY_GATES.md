@@ -17,6 +17,8 @@ No Evidence, No Accept / No Progress.
 - Verify:
   - Static: dependency and code scan for network APIs.
   - Runtime: integration test that executes `veil run` against a fixture corpus in a network-denied environment and asserts no network attempts.
+  - Static scan command: `python checks/offline_enforcement.py`
+  - Runtime smoke command: `cargo test -p veil-cli --test offline_enforcement`
 - Pass/fail:
   - PASS if both static and runtime checks pass.
 - Evidence:
@@ -108,6 +110,8 @@ evidence: PROGRESS.md :: G-SEC-KEY-HANDLING
 - Verify:
   - Crash simulation test (kill mid-run) then resume; ensure no partial outputs and states reconcile.
   - Resume refuses on policy_id mismatch.
+  - Crash+resume suite: `cargo test -p veil-cli --test phase5_gates`
+  - Resume mismatch coverage: `cargo test -p veil-cli --test cli_smoke`
 - Pass/fail:
   - PASS if resume completes correctly and invariants hold.
 - Evidence:
@@ -155,6 +159,8 @@ evidence: DECISIONS.md :: ## D-0014
 - Verify:
   - perf harness runs on a fixed fixture corpus and records baseline metrics.
   - subsequent runs compare against baseline and require a decision + mitigation if regressed.
+  - Record baseline: `python checks/perf_harness.py --record-baseline`
+  - Compare against baseline: `python checks/perf_harness.py`
 - Pass/fail:
   - PASS if no regression OR regression is explicitly approved by decision with mitigation and evidence.
 - Evidence:
@@ -166,6 +172,7 @@ evidence: PROGRESS.md :: G-PERF-NO-REGRESSION
 - Why: operators must run/diagnose offline.
 - Verify:
   - follow runbook “Local Run Quickstart” end-to-end on a fixture corpus.
+  - Runbook quickstart suite: `cargo test -p veil-cli --test phase5_gates`
 - Pass/fail:
   - PASS if commands succeed and outputs match runbook expectations.
 - Evidence:
@@ -190,6 +197,7 @@ Check IDs:
 - Why: determinism and auditability.
 - Verify:
   - manual review checklist confirms no hidden global state for policy/keys/run context.
+  - Optional grep: `rg "static mut|lazy_static|once_cell::sync::Lazy" crates`
 - Pass/fail:
   - PASS if review evidence exists for all critical-flow changes.
 - Evidence:
@@ -211,6 +219,7 @@ evidence: PROGRESS.md :: G-COMP-PACK-COMPAT
 - Why: prevent contract drift.
 - Verify:
   - contract tests assert CLI flags and Veil Pack layout match spec/04.
+  - Contract suite: `cargo test -p veil-cli --test contract_consistency`
 - Pass/fail:
   - PASS if tests match the spec and versioning rules are enforced.
 - Evidence:

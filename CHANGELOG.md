@@ -53,3 +53,12 @@
   - DOCX/PPTX/XLSX bounded OOXML extraction; embedded binaries/unknown parts force UNKNOWN coverage and quarantine.
 - Added Phase 4 gate tests (`cargo test -p veil-cli --test phase4_gates`).
 - Logged container canonicalization decision (D-0017) and updated specs/contracts accordingly.
+
+### Hardening (PHASE_5 completed)
+- Added crash+resume, determinism-with-containers, and runbook quickstart tests (`cargo test -p veil-cli --test phase5_gates`).
+- Added contract consistency tests (`cargo test -p veil-cli --test contract_consistency`).
+- Added offline enforcement checks: static scan (`checks/offline_enforcement.py`) + runtime smoke (`cargo test -p veil-cli --test offline_enforcement`).
+- Added extractor fuzz/property smoke tests (`cargo test -p veil-extract --test fuzz_smoke`).
+- Added perf harness + baseline capture (`checks/perf_harness.py`, `checks/perf_baseline.json`).
+- Hardened key handling with in-memory zeroization (`zeroize` in `crates/veil-cli`).
+- Updated runbook (`spec/12`) and checks index (`checks/CHECKS_INDEX.md`) with Phase 5 harness commands and SSOT validation automation (`checks/ssot_validate.py`).

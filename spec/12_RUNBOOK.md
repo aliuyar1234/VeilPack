@@ -5,6 +5,9 @@ This runbook assumes an offline environment.
 
 ### Build
 - `cargo build --workspace`
+- Release binary (recommended for real corpora):
+  - `cargo build -p veil-cli --release`
+  - Output: `target/release/veil` (or `target\\release\\veil.exe` on Windows)
 - Pass condition: build succeeds without network.
 
 ### Test
@@ -29,6 +32,14 @@ This runbook assumes an offline environment.
 - Pass condition:
   - exit code 0
   - no residual HIGH findings
+
+---
+
+## Offline distribution (release packaging)
+- Build a release binary on a machine with the Rust toolchain:
+  - `cargo build -p veil-cli --release`
+- Copy the resulting `veil` binary to the offline environment.
+- Veil runtime MUST NOT download anything; all inputs are local files and local policy bundles.
 
 ---
 
@@ -79,3 +90,21 @@ This runbook assumes an offline environment.
 ### Upgrading Veil
 - Verify pack_schema_version compatibility before relying on older packs.
 - If pack schema changes, bump pack_schema_version and document in spec/04.
+
+---
+
+## Phase 5 harnesses (optional operator checks)
+
+### Offline enforcement (no network)
+- Static scan: `python checks/offline_enforcement.py`
+- Runtime smoke: `cargo test -p veil-cli --test offline_enforcement`
+
+### Contract consistency (spec/04)
+- `cargo test -p veil-cli --test contract_consistency`
+
+### Fuzz/property smoke (extractors)
+- `cargo test -p veil-extract --test fuzz_smoke`
+
+### Performance baseline (no regression gate)
+- Record baseline: `python checks/perf_harness.py --record-baseline`
+- Compare: `python checks/perf_harness.py`

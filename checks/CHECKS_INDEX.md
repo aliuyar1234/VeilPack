@@ -69,6 +69,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 - Type: manual
 - How to run:
   - Confirm all non-omittable core files are present per required ZIP structure.
+  - Optional automation: `python checks/ssot_validate.py core-files`
 - Pass/fail:
   - PASS if all required files exist.
 - Evidence:
@@ -82,6 +83,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 - How to run:
   - Compare spec/00 matrix to actual files under spec/.
   - Ensure all APPLICABLE spec files exist and no NON-APPLICABLE files exist.
+  - Optional automation: `python checks/ssot_validate.py fingerprint-matrix`
 - Pass/fail:
   - PASS if matrix and filesystem match exactly.
 - Evidence:
@@ -94,6 +96,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 - Type: manual
 - How to run:
   - Confirm spec/11 contains the SLOP Enforcement Mapping table with SB-0001..SB-0012.
+  - Optional automation: `python checks/ssot_validate.py slop-mapping`
 - Pass/fail:
   - PASS if all SB IDs appear exactly once in the mapping table.
 - Evidence:
@@ -168,6 +171,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 - How to run:
   - Confirm spec/00 quality profile lists gate IDs.
   - Confirm spec/11 defines those gate IDs.
+  - Optional automation: `python checks/ssot_validate.py qac-coverage`
 - Pass/fail:
   - PASS if every quality attribute maps to at least one defined gate.
 - Evidence:
@@ -191,7 +195,8 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 - Purpose: enforce no network usage in runtime code paths.
 - Type: automated (implemented in repo)
 - How to run:
-  - Run the offline enforcement test suite (network denied) and ensure it passes.
+  - Static scan: `python checks/offline_enforcement.py`
+  - Runtime smoke (should complete quickly): `cargo test -p veil-cli --test offline_enforcement`
 - Pass/fail:
   - PASS if no network calls are attempted.
 - Evidence:
@@ -215,7 +220,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 - Purpose: ensure quarantine behavior covers error paths (parse failures, unknown coverage, verification failure).
 - Type: automated (implemented in repo)
 - How to run:
-  - Run integration tests for negative cases.
+  - `cargo test -p veil-cli --tests`
 - Pass/fail:
   - PASS if all negative cases quarantine or fail safely as specified.
 - Evidence:
@@ -227,7 +232,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 - Purpose: prevent drift between implementation and spec/04 contracts.
 - Type: automated (implemented in repo)
 - How to run:
-  - Run contract tests verifying CLI flags and Veil Pack layout.
+  - `cargo test -p veil-cli --test contract_consistency`
 - Pass/fail:
   - PASS if tests match spec/04 exactly.
 - Evidence:

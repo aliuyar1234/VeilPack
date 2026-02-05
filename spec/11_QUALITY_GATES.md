@@ -121,6 +121,9 @@ evidence: PROGRESS.md :: G-REL-LEDGER-RESUME
 - Evidence:
 evidence: PROGRESS.md :: G-REL-DETERMINISM
 
+Related decision:
+evidence: DECISIONS.md :: ## D-0014
+
 ### G-REL-ARCHIVE-LIMITS
 - Why: prevent archive bombs and unsafe paths.
 - Verify:
@@ -139,6 +142,9 @@ evidence: PROGRESS.md :: G-REL-ARCHIVE-LIMITS
   - PASS if atomicity invariant holds.
 - Evidence:
 evidence: PROGRESS.md :: G-REL-ATOMIC-COMMIT
+
+Related decision:
+evidence: DECISIONS.md :: ## D-0014
 
 ---
 

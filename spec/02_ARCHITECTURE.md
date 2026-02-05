@@ -45,7 +45,7 @@ flowchart LR
 | Policy Bundle Loader | load and hash policy bundle; compile detectors; validate policy schema | mutate policy; proceed on invalid policy |
 | Extractor | parse artifact to canonical representation; emit CoverageMap v1 | claim FULL coverage when UNKNOWN; emit plaintext secrets to logs/evidence |
 | Detector Engine | run detectors over canonical representation; produce findings | read/write filesystem |
-| Transformer/Rewriter | apply transforms; write outputs to staging; atomic commit | overwrite inputs; emit partial outputs on failure |
+| Transformer/Rewriter | apply transforms; write outputs to staging; atomic commit; apply deterministic output path mapping | overwrite inputs; emit partial outputs on failure |
 | Residual Verification | re-scan outputs; quarantine on residual; enforce VERIFIED definition | mark VERIFIED without verification |
 | Evidence Builder | emit non-sensitive evidence and manifests; bind to policy_id and run_id | store plaintext sensitive values |
 | Ledger | persist resumability state machine; record non-sensitive metadata | store plaintext sensitive values |
@@ -97,6 +97,9 @@ evidence: DECISIONS.md :: D-0002
 ## Determinism and ordering
 - Deterministic ordering and canonical serialization rules are normative.
 evidence: DECISIONS.md :: D-0003
+
+Sanitized output mapping (v1 baseline):
+evidence: DECISIONS.md :: ## D-0014
 
 ## Feature Add/Remove Playbook (normative)
 ### Add a new artifact type (extractor)

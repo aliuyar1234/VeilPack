@@ -8,8 +8,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 blake3 = "1"
 veil-domain = { path = "../veil-domain" }
+veil-detect = { path = "../veil-detect" }
 veil-evidence = { path = "../veil-evidence" }
+veil-extract = { path = "../veil-extract" }
 veil-policy = { path = "../veil-policy" }
+veil-transform = { path = "../veil-transform" }
+veil-verify = { path = "../veil-verify" }
 
 [[bin]]
 name = "veil"

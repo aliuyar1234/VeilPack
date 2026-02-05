@@ -96,6 +96,19 @@ The output directory of `veil run` is the Veil Pack root.
 - Evidence MUST never contain plaintext sensitive values.
 evidence: CONSTITUTION.md :: C-003 No plaintext sensitive values in logs/reports/evidence
 
+### Sanitized output path mapping (v1 baseline)
+To avoid plaintext path leakage in the pack, v1 baseline uses only digests for sanitized output names:
+- `sanitized/<source_locator_hash>__<artifact_id>.<ext>`
+- `<ext>` mapping (v1 baseline):
+  - TEXT → `txt`
+  - CSV → `csv`
+  - TSV → `tsv`
+  - JSON → `json`
+  - NDJSON → `ndjson`
+
+Decision:
+evidence: DECISIONS.md :: ## D-0014
+
 Decision:
 evidence: DECISIONS.md :: ## D-0013
 
@@ -112,6 +125,9 @@ A policy bundle is a directory containing `policy.json` (required). `policy.json
 | defaults | object | default actions/severity | MUST exist |
 | scopes | array | where policy applies | MUST exist (may be empty = apply everywhere) |
 
+Strictness:
+- Unknown fields MUST be rejected (fail closed).
+
 ### Class entry (conceptual)
 | Field | Type | Description | Invariants |
 |---|---|---|---|
@@ -126,11 +142,31 @@ Supported detector kinds (offline, deterministic):
 - `checksum` (e.g., Luhn-like validators where applicable)
 - `field_selector` (apply detectors only to selected structured fields)
 
+Concrete shapes (v1 baseline):
+- regex:
+  - `{"kind":"regex","pattern":"...","case_insensitive":false,"dot_matches_new_line":false}`
+- checksum:
+  - `{"kind":"checksum","algorithm":"luhn"}`
+- field_selector:
+  - `{"kind":"field_selector","selector":"json_pointer"|"csv_header","fields":[...]}`
+
 ### Action definition (v1)
 - `REDACT`: replace with class marker
 - `MASK`: retain partials per configured rule
 - `DROP`: remove value/field
 - `TOKENIZE`: only permitted if tokenization enabled (D-0004)
+
+Concrete shapes (v1 baseline):
+- `{"kind":"REDACT"}`
+- `{"kind":"MASK","keep_last":N}` where `N >= 1`
+- `{"kind":"DROP"}`
+
+V1 baseline support limits:
+- `scopes` MUST be empty (`[]`) in v1 baseline.
+- `TOKENIZE` is reserved but not supported in v1 baseline; policies using it MUST be rejected.
+
+Decision:
+evidence: DECISIONS.md :: ## D-0015
 
 ### Policy compatibility
 - policy schema changes MUST be versioned.

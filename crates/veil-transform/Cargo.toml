@@ -8,3 +8,5 @@ veil-detect = { path = "../veil-detect" }
 veil-domain = { path = "../veil-domain" }
 veil-extract = { path = "../veil-extract" }
 veil-policy = { path = "../veil-policy" }
+csv = "1"
+serde_json = "1"

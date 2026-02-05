@@ -14,12 +14,12 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 | T-0006 | PHASE_0_BOOTSTRAP | DONE |
 | T-0101 | PHASE_1_CORE_PIPELINE | DONE |
 | T-0102 | PHASE_1_CORE_PIPELINE | DONE |
-| T-0103 | PHASE_1_CORE_PIPELINE | TODO |
-| T-0104 | PHASE_1_CORE_PIPELINE | TODO |
-| T-0105 | PHASE_1_CORE_PIPELINE | TODO |
-| T-0106 | PHASE_1_CORE_PIPELINE | TODO |
-| T-0107 | PHASE_1_CORE_PIPELINE | TODO |
-| T-0108 | PHASE_1_CORE_PIPELINE | TODO |
+| T-0103 | PHASE_1_CORE_PIPELINE | DONE |
+| T-0104 | PHASE_1_CORE_PIPELINE | DONE |
+| T-0105 | PHASE_1_CORE_PIPELINE | DONE |
+| T-0106 | PHASE_1_CORE_PIPELINE | DONE |
+| T-0107 | PHASE_1_CORE_PIPELINE | DONE |
+| T-0108 | PHASE_1_CORE_PIPELINE | DONE |
 | T-0109 | PHASE_1_CORE_PIPELINE | DONE |
 | T-0110 | PHASE_1_CORE_PIPELINE | DONE |
 | T-0201 | PHASE_2_POLICY_BUNDLE | TODO |
@@ -115,28 +115,66 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
     - `cargo test -p veil-cli --test cli_smoke` PASS
 
 ### T-0103
-- status: TODO
+- status: DONE
 - evidence:
+  - Extractor framework + registry implemented:
+    - `crates/veil-extract` returns canonical artifacts + CoverageMap v1 or QUARANTINED.
+    - `veil run` enforces `UNKNOWN` coverage → QUARANTINED (fail-closed).
+  - Tests:
+    - `cargo test -p veil-extract` PASS
+    - `cargo test -p veil-cli --test phase1_gates` PASS
 
 ### T-0104
-- status: TODO
+- status: DONE
 - evidence:
+  - Built-in extractors implemented: TEXT, CSV/TSV, JSON, NDJSON.
+  - Canonicalization rules enforced:
+    - JSON/NDJSON object keys sorted recursively.
+    - CSV/TSV parsed with headers; canonical writer emits LF line endings.
+  - Tests:
+    - `cargo test -p veil-extract` PASS
 
 ### T-0105
-- status: TODO
+- status: DONE
 - evidence:
+  - Detector engine v1 implemented (offline, deterministic):
+    - regex detectors (bounded at policy load)
+    - checksum: Luhn
+    - field selectors: json_pointer and csv_header
+  - Tests:
+    - `cargo test -p veil-detect` PASS
+    - `cargo test -p veil-cli --test phase1_gates` PASS
 
 ### T-0106
-- status: TODO
+- status: DONE
 - evidence:
+  - Transform engine v1 implemented (deterministic):
+    - REDACT: `{{<class_id>}}` marker replacement
+    - MASK: keep last N chars
+    - DROP: delete matched spans
+  - Transforms applied before outputs are committed.
+  - Tests:
+    - `cargo test -p veil-cli --test phase1_gates` PASS
 
 ### T-0107
-- status: TODO
+- status: DONE
 - evidence:
+  - Rewriters + atomic commit staging implemented:
+    - stage writes under `<workdir>/staging/`
+    - fsync staged file then rename into `sanitized/`
+    - deterministic output mapping per D-0014
+  - Atomicity regression test:
+    - `cargo test -p veil-cli --test phase1_gates` PASS (failpoint ensures no partial files in `sanitized/`)
 
 ### T-0108
-- status: TODO
+- status: DONE
 - evidence:
+  - Residual verification enforced in `veil run` (two-pass scan):
+    - output is re-parsed and re-scanned with the same detector set
+    - residual HIGH findings quarantine with reason `VERIFICATION_FAILED`
+  - `veil verify` implemented and re-scans VERIFIED outputs.
+  - Tests:
+    - `cargo test -p veil-cli --test phase1_gates` PASS (residual quarantine + verify tamper regression)
 
 ### T-0109
 - status: DONE
@@ -144,7 +182,9 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Exit code semantics enforced:
     - `2` when any artifacts are QUARANTINED
     - `0` only when no quarantines exist
-  - Quarantine reason codes emitted as stable, non-sensitive codes (v1 baseline uses `UNKNOWN_COVERAGE`).
+  - Quarantine reason codes emitted as stable, non-sensitive codes (spec/03).
+  - Reason codes exercised end-to-end (non-sensitive):
+    - `UNSUPPORTED_FORMAT`, `PARSE_ERROR`, `UNKNOWN_COVERAGE`, `VERIFICATION_FAILED`, `INTERNAL_ERROR`
   - `cargo test --workspace` PASS
 
 ### T-0110
@@ -230,12 +270,14 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
 
 ### G-SEC-FAIL-CLOSED-TERMINAL
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase1_gates` PASS (asserts every artifact ends VERIFIED or QUARANTINED)
 
 ### G-SEC-NO-PLAINTEXT-LEAKS
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase1_gates` PASS (canary string absent from logs/evidence/quarantine index + sanitized)
 
 ### G-SEC-POLICY-ID-IMMUTABLE
 - status: TODO
@@ -246,8 +288,9 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
 
 ### G-SEC-VERIFY-RESIDUAL
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase1_gates` PASS (residual verification quarantines; `veil verify` catches tampered VERIFIED output)
 
 ### G-SEC-KEY-HANDLING
 - status: TODO
@@ -262,16 +305,18 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
 
 ### G-REL-DETERMINISM
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase1_gates` PASS (double-run snapshot equality; excludes `.veil_work/`)
 
 ### G-REL-ARCHIVE-LIMITS
 - status: TODO
 - evidence:
 
 ### G-REL-ATOMIC-COMMIT
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase1_gates` PASS (failpoint abort after staging write; asserts `sanitized/` contains no partial files)
 
 ### G-PERF-NO-REGRESSION
 - status: TODO
@@ -360,8 +405,9 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
 
 ### CHK-NO-PLAINTEXT-LEAKS
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase1_gates` PASS (canary regression)
 
 ### CHK-NEGATIVE-PATHS
 - status: TODO
@@ -372,8 +418,9 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
 
 ### CHK-FAIL-CLOSED-INVARIANTS
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase1_gates` PASS (terminal states only; no partial outputs on failpoint)
 
 
 ## SLOP_BLACKLIST Evidence
@@ -432,3 +479,4 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - 2026-02-03: Initial SSOT pack generation.
 - 2026-02-05: PHASE_0 bootstrap started (Rust workspace scaffold + fail-closed CLI stub + boundary fitness check + CI baseline).
 - 2026-02-05: PHASE_1 baseline started (pack layout v1 output + resumability ledger/resume + pack schema version decision).
+- 2026-02-05: PHASE_1 core pipeline completed (extract/detect/transform/residual verify + atomic commit + determinism + canary tests).

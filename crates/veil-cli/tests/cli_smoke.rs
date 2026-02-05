@@ -10,6 +10,31 @@ fn veil_cmd() -> Command {
     Command::new(env!("CARGO_BIN_EXE_veil"))
 }
 
+fn minimal_policy_json(detector_pattern: &str) -> String {
+    format!(
+        r#"{{
+  "schema_version": "policy.v1",
+  "classes": [
+    {{
+      "class_id": "PII.Test",
+      "severity": "HIGH",
+      "detectors": [
+        {{
+          "kind": "regex",
+          "pattern": "{detector_pattern}"
+        }}
+      ],
+      "action": {{
+        "kind": "REDACT"
+      }}
+    }}
+  ],
+  "defaults": {{}},
+  "scopes": []
+}}"#
+    )
+}
+
 struct TestDir {
     path: PathBuf,
 }
@@ -64,9 +89,11 @@ fn run_missing_flags_is_usage_error() {
 fn run_valid_args_produces_pack_with_quarantines() {
     let input = TestDir::new("input");
     std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+    std::fs::write(input.join("b.bin"), b"\x00\x01\x02").expect("write input file");
 
     let policy = TestDir::new("policy");
-    std::fs::write(policy.join("policy.json"), "{}").expect("write policy.json");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
 
     let output = TestDir::new("output");
 
@@ -113,7 +140,8 @@ fn run_resumes_when_in_progress_marker_and_ledger_exist() {
     std::fs::write(input.join("a.txt"), "hello").expect("write input file");
 
     let policy = TestDir::new("resume_policy");
-    std::fs::write(policy.join("policy.json"), "{}").expect("write policy.json");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
     let policy_id = veil_policy::compute_policy_id(policy.path()).expect("compute policy_id");
 
     let bytes = std::fs::read(input.join("a.txt")).expect("read input file");
@@ -153,7 +181,7 @@ fn run_resumes_when_in_progress_marker_and_ledger_exist() {
         .output()
         .expect("run veil run (resume)");
 
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(0));
     assert!(output.join("pack_manifest.json").is_file());
     assert!(!marker_path.exists());
 }
@@ -164,7 +192,8 @@ fn run_resume_refuses_when_policy_mismatches_in_progress_pack() {
     std::fs::write(input.join("a.txt"), "hello").expect("write input file");
 
     let policy_a = TestDir::new("policy_a");
-    std::fs::write(policy_a.join("policy.json"), "A").expect("write policy.json");
+    std::fs::write(policy_a.join("policy.json"), minimal_policy_json("NO_MATCH_A"))
+        .expect("write policy.json");
     let policy_id_a = veil_policy::compute_policy_id(policy_a.path()).expect("compute policy_id");
 
     let bytes = std::fs::read(input.join("a.txt")).expect("read input file");
@@ -194,7 +223,8 @@ fn run_resume_refuses_when_policy_mismatches_in_progress_pack() {
     .expect("create ledger");
 
     let policy_b = TestDir::new("policy_b");
-    std::fs::write(policy_b.join("policy.json"), "B").expect("write policy.json");
+    std::fs::write(policy_b.join("policy.json"), minimal_policy_json("NO_MATCH_B"))
+        .expect("write policy.json");
 
     let out = veil_cmd()
         .arg("run")

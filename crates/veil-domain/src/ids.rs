@@ -105,6 +105,10 @@ macro_rules! id_newtype {
             pub fn to_hex(&self) -> String {
                 self.0.to_hex()
             }
+
+            pub fn from_hex(hex: &str) -> Result<Self, ParseHexError> {
+                Ok(Self(Digest32::from_hex(hex)?))
+            }
         }
 
         impl fmt::Debug for $name {

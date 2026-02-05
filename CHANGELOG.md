@@ -25,3 +25,13 @@
 - Implemented a minimal `veil run` that emits Veil Pack layout v1 (sanitized/quarantine/evidence + pack_manifest).
 - Added SQLite ledger v1 (`ledger.sqlite3`) and safe resume support using an in-progress marker.
 - Logged `pack_schema_version` literal `pack.v1` (D-0013) and updated `spec/04` accordingly.
+
+### Core pipeline (PHASE_1 completed)
+- Implemented end-to-end deterministic pipeline for core formats:
+  - policy loading (strict v1 baseline support)
+  - extraction + CoverageMap v1
+  - detection (regex/Luhn + field selectors)
+  - transforms (REDACT/MASK/DROP)
+  - residual verification pass + `veil verify`
+  - atomic staging + deterministic sanitized path mapping
+- Added Phase 1 gate tests (fail-closed terminal, residual verify, no-plaintext canary, determinism, atomic commit).

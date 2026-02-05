@@ -717,3 +717,127 @@ evidence: spec/11_QUALITY_GATES.md :: G-COMP-CONTRACT-CONSISTENCY
 
 ### Fail-closed baseline behavior
 - If `pack_schema_version` is missing or unknown, Veil MUST refuse to verify the pack.
+
+---
+
+## D-0014 — Sanitized output path mapping + atomic commit staging (v1 baseline)
+
+### Decision statement
+- Sanitized outputs MUST be written under `<pack_root>/sanitized/` using **hash-derived, collision-safe** file names:
+  - `sanitized/<source_locator_hash>__<artifact_id>.<ext>`
+  - where:
+    - `artifact_id = BLAKE3(original bytes)` (spec/10 T-0101)
+    - `source_locator_hash = BLAKE3(normalized relative path)` (spec/10 T-0101)
+    - `<ext>` is derived from the artifact type:
+      - TEXT → `txt`
+      - CSV → `csv`
+      - TSV → `tsv`
+      - JSON → `json`
+      - NDJSON → `ndjson`
+- Plaintext input paths MUST NOT be used in sanitized output path mapping for v1 baseline.
+- Outputs MUST be committed atomically:
+  - write to `<workdir>/staging/` first
+  - `fsync` the staged file
+  - `rename` into `sanitized/` as the final step for that artifact
+
+### Rationale
+- Prevents accidental disclosure of sensitive or identifying metadata embedded in file names/paths.
+- Guarantees crash safety: partial writes never appear in `sanitized/`.
+- Keeps mapping deterministic and audit-friendly by using stable IDs already present in evidence/ledger.
+
+### Alternatives considered
+- Preserve original relative paths under `sanitized/`:
+  - rejected for v1 baseline: paths can contain sensitive identifiers and are often shared alongside packs.
+- Name outputs by `artifact_id` only:
+  - rejected: identical bytes in different source locations would collide.
+
+### Implications (what it affects)
+- `veil run` uses only digests to name sanitized outputs; operators correlate using `artifacts.ndjson` (artifact_id + source_locator_hash).
+- Output mapping becomes part of the v1 pack compatibility surface.
+
+### Affected files
+- spec/02_ARCHITECTURE.md (pipeline emission and staging)
+- spec/04_INTERFACES_AND_CONTRACTS.md (sanitized output mapping)
+- spec/11_QUALITY_GATES.md (atomic commit + determinism evidence)
+- crates/veil-cli/src/main.rs
+
+### Verification impact
+- Must exist:
+  - deterministic output mapping tests
+  - atomic commit tests ensuring no partial files appear in `sanitized/` on failure
+- Gates/checks:
+evidence: spec/11_QUALITY_GATES.md :: G-REL-DETERMINISM
+evidence: spec/11_QUALITY_GATES.md :: G-REL-ATOMIC-COMMIT
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: YES (output emission + metadata leakage)
+- unsafe/high-risk: YES (pack is a sharing unit)
+- conservative baseline available: YES (hash-derived naming)
+- safe to decide: YES (fully testable and reversible in future versions)
+
+### Conservative baseline
+- YES (hash-derived names + atomic rename)
+
+### Fail-closed baseline behavior
+- If staging or atomic rename cannot be performed, the artifact MUST be QUARANTINED (or the run MUST fail if safety cannot be preserved).
+
+---
+
+## D-0015 — Policy JSON schema v1 concrete shape (v1 baseline support)
+
+### Decision statement
+- `policy.json` MUST be strict JSON (UTF-8) with unknown fields rejected.
+- V1 baseline implements the following concrete shapes:
+  - Detectors are objects tagged by `kind`:
+    - `{"kind":"regex","pattern":"...","case_insensitive":false,"dot_matches_new_line":false}`
+    - `{"kind":"checksum","algorithm":"luhn"}`
+    - `{"kind":"field_selector","selector":"json_pointer"|"csv_header","fields":["/ptr"|"header", ...]}`
+  - Actions are objects tagged by `kind`:
+    - `{"kind":"REDACT"}`
+    - `{"kind":"MASK","keep_last":N}` with `N >= 1`
+    - `{"kind":"DROP"}`
+- V1 baseline support limits:
+  - `scopes` MUST exist and MUST be empty (`[]`) in v1 baseline.
+  - `TOKENIZE` is reserved but NOT supported in v1 baseline; policies using it MUST be rejected (fail closed).
+- Regex compilation MUST be bounded (size/dfa limits) and invalid patterns MUST be rejected.
+
+### Rationale
+- Makes the policy contract explicit and machine-checkable.
+- Keeps baseline safe and small: scopes and tokenization introduce additional critical-flow complexity and key-handling requirements.
+
+### Alternatives considered
+- Lenient/implicit policy parsing (unknown fields ignored, missing defaults inferred):
+  - rejected: silent drift and unsafe misconfiguration.
+- Accept non-empty scopes but ignore them:
+  - rejected: would violate operator intent and could transform outside intended scope.
+- Allow TOKENIZE without implementing key handling:
+  - rejected: would create false security assumptions.
+
+### Implications (what it affects)
+- `veil run` MUST refuse to start on invalid policy bundles (exit code 3).
+- Field selectors apply only where meaningful; unsupported combinations are treated conservatively.
+
+### Affected files
+- spec/04_INTERFACES_AND_CONTRACTS.md (Policy Bundle Schema v1)
+- crates/veil-policy/src/lib.rs
+- crates/veil-cli/src/main.rs
+
+### Verification impact
+- Must exist:
+  - integration coverage: invalid policy causes exit code 3; valid policy drives the pipeline
+- Gates/checks:
+evidence: spec/11_QUALITY_GATES.md :: G-COMP-CONTRACT-CONSISTENCY
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: YES (policy binding drives transformation + verification)
+- unsafe/high-risk: YES (misparsed policy can leak data)
+- conservative baseline available: YES (strict schema + reject unsupported features)
+- safe to decide: YES (explicit contract + tests)
+
+### Conservative baseline
+- YES (strict schema; no scopes; no tokenization)
+
+### Fail-closed baseline behavior
+- If policy parsing/compilation fails, Veil MUST refuse to run (exit code 3) and MUST NOT process any artifact.

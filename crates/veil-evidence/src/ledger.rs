@@ -26,6 +26,14 @@ pub struct Ledger {
     conn: Connection,
 }
 
+#[derive(Debug, Clone)]
+pub struct FindingsSummaryRow<'a> {
+    pub class_id: &'a str,
+    pub severity: &'a str,
+    pub action: &'a str,
+    pub count: u64,
+}
+
 impl Ledger {
     pub fn create_new(
         path: &Path,
@@ -194,6 +202,173 @@ WHERE artifact_id=?1 AND state NOT IN ('VERIFIED', 'QUARANTINED')
             ],
         )
         .map_err(|_| LedgerError::Sql)?;
+
+        tx.commit().map_err(|_| LedgerError::Sql)?;
+        Ok(())
+    }
+
+    pub fn upsert_discovered(
+        &mut self,
+        artifact_id: &ArtifactId,
+        source_locator_hash: &SourceLocatorHash,
+        size_bytes: u64,
+        artifact_type: &str,
+    ) -> Result<(), LedgerError> {
+        let tx = self.conn.transaction().map_err(|_| LedgerError::Sql)?;
+        tx.execute(
+            r#"
+INSERT INTO artifacts (
+  artifact_id,
+  source_locator_hash,
+  size_bytes,
+  artifact_type,
+  state,
+  quarantine_reason_code,
+  extractor_id,
+  coverage_hash,
+  output_id
+) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL, NULL)
+ON CONFLICT(artifact_id) DO UPDATE SET
+  source_locator_hash=excluded.source_locator_hash,
+  size_bytes=excluded.size_bytes,
+  artifact_type=excluded.artifact_type
+WHERE artifacts.state NOT IN ('VERIFIED', 'QUARANTINED')
+"#,
+            params![
+                artifact_id.to_string(),
+                source_locator_hash.to_string(),
+                i64::try_from(size_bytes).unwrap_or(i64::MAX),
+                artifact_type,
+                ArtifactState::Discovered.as_str(),
+            ],
+        )
+        .map_err(|_| LedgerError::Sql)?;
+        tx.commit().map_err(|_| LedgerError::Sql)?;
+        Ok(())
+    }
+
+    pub fn mark_extracted(
+        &mut self,
+        artifact_id: &ArtifactId,
+        extractor_id: &str,
+        coverage_hash: &str,
+    ) -> Result<(), LedgerError> {
+        let tx = self.conn.transaction().map_err(|_| LedgerError::Sql)?;
+        tx.execute(
+            r#"
+UPDATE artifacts
+SET state=?2,
+    extractor_id=?3,
+    coverage_hash=?4,
+    quarantine_reason_code=NULL,
+    output_id=NULL
+WHERE artifact_id=?1 AND state NOT IN ('VERIFIED', 'QUARANTINED')
+"#,
+            params![
+                artifact_id.to_string(),
+                ArtifactState::Extracted.as_str(),
+                extractor_id,
+                coverage_hash
+            ],
+        )
+        .map_err(|_| LedgerError::Sql)?;
+        tx.commit().map_err(|_| LedgerError::Sql)?;
+        Ok(())
+    }
+
+    pub fn mark_transformed(&mut self, artifact_id: &ArtifactId) -> Result<(), LedgerError> {
+        let tx = self.conn.transaction().map_err(|_| LedgerError::Sql)?;
+        tx.execute(
+            r#"
+UPDATE artifacts
+SET state=?2
+WHERE artifact_id=?1 AND state NOT IN ('VERIFIED', 'QUARANTINED')
+"#,
+            params![artifact_id.to_string(), ArtifactState::Transformed.as_str()],
+        )
+        .map_err(|_| LedgerError::Sql)?;
+        tx.commit().map_err(|_| LedgerError::Sql)?;
+        Ok(())
+    }
+
+    pub fn mark_verified(
+        &mut self,
+        artifact_id: &ArtifactId,
+        output_id: &str,
+    ) -> Result<(), LedgerError> {
+        let tx = self.conn.transaction().map_err(|_| LedgerError::Sql)?;
+        tx.execute(
+            r#"
+UPDATE artifacts
+SET state=?2,
+    quarantine_reason_code=NULL,
+    output_id=?3
+WHERE artifact_id=?1 AND state NOT IN ('VERIFIED', 'QUARANTINED')
+"#,
+            params![
+                artifact_id.to_string(),
+                ArtifactState::Verified.as_str(),
+                output_id
+            ],
+        )
+        .map_err(|_| LedgerError::Sql)?;
+        tx.commit().map_err(|_| LedgerError::Sql)?;
+        Ok(())
+    }
+
+    pub fn quarantine(
+        &mut self,
+        artifact_id: &ArtifactId,
+        reason: QuarantineReasonCode,
+    ) -> Result<(), LedgerError> {
+        let tx = self.conn.transaction().map_err(|_| LedgerError::Sql)?;
+        tx.execute(
+            r#"
+UPDATE artifacts
+SET state=?2,
+    quarantine_reason_code=?3,
+    output_id=NULL
+WHERE artifact_id=?1 AND state NOT IN ('VERIFIED', 'QUARANTINED')
+"#,
+            params![
+                artifact_id.to_string(),
+                ArtifactState::Quarantined.as_str(),
+                reason.as_str()
+            ],
+        )
+        .map_err(|_| LedgerError::Sql)?;
+        tx.commit().map_err(|_| LedgerError::Sql)?;
+        Ok(())
+    }
+
+    pub fn replace_findings_summary(
+        &mut self,
+        artifact_id: &ArtifactId,
+        rows: &[FindingsSummaryRow<'_>],
+    ) -> Result<(), LedgerError> {
+        let tx = self.conn.transaction().map_err(|_| LedgerError::Sql)?;
+        tx.execute(
+            "DELETE FROM findings_summary WHERE artifact_id=?1",
+            params![artifact_id.to_string()],
+        )
+        .map_err(|_| LedgerError::Sql)?;
+
+        for r in rows {
+            tx.execute(
+                r#"
+INSERT INTO findings_summary (artifact_id, class_id, severity, action, count)
+VALUES (?1, ?2, ?3, ?4, ?5)
+"#,
+                params![
+                    artifact_id.to_string(),
+                    r.class_id,
+                    r.severity,
+                    r.action,
+                    i64::try_from(r.count).unwrap_or(i64::MAX)
+                ],
+            )
+            .map_err(|_| LedgerError::Sql)?;
+        }
 
         tx.commit().map_err(|_| LedgerError::Sql)?;
         Ok(())

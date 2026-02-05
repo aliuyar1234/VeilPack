@@ -5,6 +5,31 @@ fn veil_cmd() -> Command {
     Command::new(env!("CARGO_BIN_EXE_veil"))
 }
 
+fn minimal_policy_json(detector_pattern: &str) -> String {
+    format!(
+        r#"{{
+  "schema_version": "policy.v1",
+  "classes": [
+    {{
+      "class_id": "PII.Test",
+      "severity": "HIGH",
+      "detectors": [
+        {{
+          "kind": "regex",
+          "pattern": "{detector_pattern}"
+        }}
+      ],
+      "action": {{
+        "kind": "REDACT"
+      }}
+    }}
+  ],
+  "defaults": {{}},
+  "scopes": []
+}}"#
+    )
+}
+
 struct TestDir {
     path: PathBuf,
 }
@@ -45,7 +70,8 @@ fn run_accepts_valid_limits_json() {
     std::fs::write(input.join("a.txt"), "hello").expect("write input file");
 
     let policy = TestDir::new("policy_limits_ok");
-    std::fs::write(policy.join("policy.json"), "{}").expect("write policy.json");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
 
     let output = TestDir::new("output_limits_ok");
 
@@ -70,8 +96,8 @@ fn run_accepts_valid_limits_json() {
         .output()
         .expect("run veil run");
 
-    // Valid limits-json should pass validation and hit the fail-closed stub path.
-    assert_eq!(out.status.code(), Some(2));
+    // Valid limits-json should pass validation and complete.
+    assert_eq!(out.status.code(), Some(0));
 }
 
 #[test]
@@ -80,7 +106,8 @@ fn run_rejects_wrong_limits_schema_version() {
     std::fs::write(input.join("a.txt"), "hello").expect("write input file");
 
     let policy = TestDir::new("policy_limits_bad_schema");
-    std::fs::write(policy.join("policy.json"), "{}").expect("write policy.json");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
 
     let output = TestDir::new("output_limits_bad_schema");
 
@@ -110,7 +137,8 @@ fn run_rejects_limits_json_unknown_fields() {
     std::fs::write(input.join("a.txt"), "hello").expect("write input file");
 
     let policy = TestDir::new("policy_limits_unknown_fields");
-    std::fs::write(policy.join("policy.json"), "{}").expect("write policy.json");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
 
     let output = TestDir::new("output_limits_unknown_fields");
 

@@ -73,7 +73,10 @@ struct PackManifestJsonV1 {
     run_id: String,
     policy_id: String,
     input_corpus_id: String,
+    tokenization_enabled: bool,
+    tokenization_scope: Option<String>,
     quarantine_copy_enabled: bool,
+    ledger_schema_version: String,
 }
 
 #[test]
@@ -140,15 +143,22 @@ fn pack_layout_v1_contains_required_paths() {
     assert!(output.join("evidence").join("artifacts.ndjson").is_file());
     assert!(output.join("evidence").join("ledger.sqlite3").is_file());
 
-    let pack_manifest: PackManifestJsonV1 =
-        serde_json::from_slice(&std::fs::read(output.join("pack_manifest.json")).expect("read pack_manifest.json"))
-            .expect("parse pack_manifest.json");
+    let pack_manifest: PackManifestJsonV1 = serde_json::from_slice(
+        &std::fs::read(output.join("pack_manifest.json")).expect("read pack_manifest.json"),
+    )
+    .expect("parse pack_manifest.json");
     assert_eq!(pack_manifest.pack_schema_version, "pack.v1");
     assert!(!pack_manifest.tool_version.is_empty());
     assert!(!pack_manifest.run_id.is_empty());
     assert!(!pack_manifest.policy_id.is_empty());
     assert!(!pack_manifest.input_corpus_id.is_empty());
+    assert!(!pack_manifest.tokenization_enabled);
+    assert!(pack_manifest.tokenization_scope.is_none());
     assert!(!pack_manifest.quarantine_copy_enabled);
+    assert_eq!(
+        pack_manifest.ledger_schema_version,
+        veil_evidence::LEDGER_SCHEMA_VERSION
+    );
 }
 
 #[test]
@@ -175,10 +185,15 @@ fn quarantine_raw_copy_is_opt_in_and_recorded() {
         .expect("run veil run");
     assert_eq!(out.status.code(), Some(2));
 
-    let pack_manifest: PackManifestJsonV1 =
-        serde_json::from_slice(&std::fs::read(output.join("pack_manifest.json")).expect("read pack_manifest.json"))
-            .expect("parse pack_manifest.json");
+    let pack_manifest: PackManifestJsonV1 = serde_json::from_slice(
+        &std::fs::read(output.join("pack_manifest.json")).expect("read pack_manifest.json"),
+    )
+    .expect("parse pack_manifest.json");
     assert!(pack_manifest.quarantine_copy_enabled);
+    assert_eq!(
+        pack_manifest.ledger_schema_version,
+        veil_evidence::LEDGER_SCHEMA_VERSION
+    );
 
     assert!(output.join("quarantine").join("raw").is_dir());
     let has_raw_file = std::fs::read_dir(output.join("quarantine").join("raw"))
@@ -187,3 +202,43 @@ fn quarantine_raw_copy_is_opt_in_and_recorded() {
     assert!(has_raw_file);
 }
 
+#[test]
+fn pack_manifest_records_tokenization_scope_when_enabled() {
+    let input = TestDir::new("contract_token_input");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy = TestDir::new("contract_token_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let secret_dir = TestDir::new("contract_token_secret");
+    let secret_key = secret_dir.join("secret.key");
+    std::fs::write(&secret_key, "CONTRACT_TEST_SECRET").expect("write secret");
+
+    let output = TestDir::new("contract_token_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .args(["--enable-tokenization", "true"])
+        .arg("--secret-key-file")
+        .arg(&secret_key)
+        .output()
+        .expect("run veil run");
+    assert_eq!(out.status.code(), Some(0));
+
+    let pack_manifest: PackManifestJsonV1 = serde_json::from_slice(
+        &std::fs::read(output.join("pack_manifest.json")).expect("read pack_manifest.json"),
+    )
+    .expect("parse pack_manifest.json");
+    assert!(pack_manifest.tokenization_enabled);
+    assert_eq!(pack_manifest.tokenization_scope.as_deref(), Some("PER_RUN"));
+    assert_eq!(
+        pack_manifest.ledger_schema_version,
+        veil_evidence::LEDGER_SCHEMA_VERSION
+    );
+}

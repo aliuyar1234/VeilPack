@@ -80,7 +80,11 @@ fn snapshot_files(root: &Path) -> BTreeMap<String, String> {
             let path = e.path();
             let rel = path.strip_prefix(root).expect("strip_prefix");
 
-            if rel.components().next().is_some_and(|c| c.as_os_str() == ".veil_work") {
+            if rel
+                .components()
+                .next()
+                .is_some_and(|c| c.as_os_str() == ".veil_work")
+            {
                 continue;
             }
 
@@ -104,7 +108,12 @@ fn snapshot_files(root: &Path) -> BTreeMap<String, String> {
     out
 }
 
-fn expected_sanitized_path(pack_root: &Path, rel: &str, artifact_bytes: &[u8], ext: &str) -> PathBuf {
+fn expected_sanitized_path(
+    pack_root: &Path,
+    rel: &str,
+    artifact_bytes: &[u8],
+    ext: &str,
+) -> PathBuf {
     let artifact_id = veil_domain::hash_artifact_id(artifact_bytes);
     let source_locator_hash = veil_domain::hash_source_locator_hash(rel);
     let sort_key = veil_domain::ArtifactSortKey::new(artifact_id, source_locator_hash);
@@ -200,10 +209,7 @@ fn resume_after_crash_completes_remaining_artifacts() {
         .expect("run veil run (crash)");
     assert_eq!(out.status.code(), Some(1));
 
-    let marker_path = output
-        .path()
-        .join(".veil_work")
-        .join("in_progress.marker");
+    let marker_path = output.path().join(".veil_work").join("in_progress.marker");
     assert!(marker_path.is_file(), "in-progress marker should exist");
     assert!(!output.path().join("pack_manifest.json").exists());
 
@@ -211,10 +217,15 @@ fn resume_after_crash_completes_remaining_artifacts() {
     let b_out = expected_sanitized_path(output.path(), "b.txt", &b_bytes, "txt");
     let a_exists = a_out.is_file();
     let b_exists = b_out.is_file();
-    assert_ne!(a_exists, b_exists, "expected exactly one VERIFIED output before crash");
+    assert_ne!(
+        a_exists, b_exists,
+        "expected exactly one VERIFIED output before crash"
+    );
 
     let preserved = if a_exists { &a_out } else { &b_out };
-    let preserved_hash_before = blake3::hash(&std::fs::read(preserved).expect("read preserved")).to_hex().to_string();
+    let preserved_hash_before = blake3::hash(&std::fs::read(preserved).expect("read preserved"))
+        .to_hex()
+        .to_string();
 
     let out = veil_cmd()
         .arg("run")
@@ -228,13 +239,21 @@ fn resume_after_crash_completes_remaining_artifacts() {
         .expect("run veil run (resume)");
     assert_eq!(out.status.code(), Some(0));
 
-    assert!(!marker_path.exists(), "in-progress marker should be removed");
+    assert!(
+        !marker_path.exists(),
+        "in-progress marker should be removed"
+    );
     assert!(output.path().join("pack_manifest.json").is_file());
     assert!(a_out.is_file());
     assert!(b_out.is_file());
 
-    let preserved_hash_after = blake3::hash(&std::fs::read(preserved).expect("read preserved")).to_hex().to_string();
-    assert_eq!(preserved_hash_before, preserved_hash_after, "terminal VERIFIED output must not change across resume");
+    let preserved_hash_after = blake3::hash(&std::fs::read(preserved).expect("read preserved"))
+        .to_hex()
+        .to_string();
+    assert_eq!(
+        preserved_hash_before, preserved_hash_after,
+        "terminal VERIFIED output must not change across resume"
+    );
 }
 
 #[test]
@@ -267,13 +286,11 @@ fn determinism_corpus_with_containers_is_stable() {
     std::fs::write(input.join("f.mbox"), mbox).expect("write f.mbox");
 
     let doc_xml = r#"<?xml version="1.0" encoding="UTF-8"?><doc>SECRET</doc>"#;
-    let docx_bytes = make_zip_bytes(
-        &[
-            ("[Content_Types].xml", b"<types/>"),
-            ("word/document.xml", doc_xml.as_bytes()),
-            ("_rels/.rels", b"<rels/>"),
-        ],
-    );
+    let docx_bytes = make_zip_bytes(&[
+        ("[Content_Types].xml", b"<types/>"),
+        ("word/document.xml", doc_xml.as_bytes()),
+        ("_rels/.rels", b"<rels/>"),
+    ]);
     std::fs::write(input.join("g.docx"), &docx_bytes).expect("write g.docx");
 
     let policy = TestDir::new("det5_policy");
@@ -345,3 +362,42 @@ fn runbook_quickstart_end_to_end() {
     assert_eq!(verify.status.code(), Some(0));
 }
 
+#[test]
+fn resume_fails_closed_on_invalid_existing_artifacts_evidence() {
+    let input = TestDir::new("resume_invalid_evidence_input");
+    std::fs::write(input.join("a.txt"), "SECRET A").expect("write a.txt");
+    std::fs::write(input.join("b.txt"), "SECRET B").expect("write b.txt");
+
+    let policy = TestDir::new("resume_invalid_evidence_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("resume_invalid_evidence_output");
+    let out = veil_cmd()
+        .env("VEIL_FAILPOINT", "after_first_verified")
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run (crash)");
+    assert_eq!(out.status.code(), Some(1));
+
+    let artifacts_path = output.path().join("evidence").join("artifacts.ndjson");
+    std::fs::write(&artifacts_path, "{not-json\n").expect("write invalid artifacts.ndjson");
+
+    let resumed = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run (resume)");
+    assert_eq!(resumed.status.code(), Some(1));
+}

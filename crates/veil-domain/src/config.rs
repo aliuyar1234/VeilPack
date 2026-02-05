@@ -17,6 +17,7 @@ pub struct ArchiveLimits {
     pub max_entries_per_archive: u32,
     pub max_expansion_ratio: u32,
     pub max_expanded_bytes_per_archive: u64,
+    pub max_bytes_per_artifact: u64,
 }
 
 impl Default for ArchiveLimits {
@@ -26,6 +27,7 @@ impl Default for ArchiveLimits {
             max_entries_per_archive: 100_000,
             max_expansion_ratio: 25,
             max_expanded_bytes_per_archive: 50 * 1024 * 1024 * 1024,
+            max_bytes_per_artifact: 256 * 1024 * 1024,
         }
     }
 }

@@ -18,7 +18,7 @@ evidence: spec/11_QUALITY_GATES.md :: SLOP Enforcement Mapping (SB-0001..SB-0012
 - Non-blocking questions are retained (Q-0009+) and do not block progress because conservative baselines exist (quarantine/disable).
 evidence: QUESTIONS_FOR_USER.md :: Q-0009
 - Externally constrained compliance is not claimed; policy profiles are treated as templates only (non-claims).
-evidence: ASSUMPTIONS.md :: A-0003 — No external compliance regime is asserted in this SSOT
+evidence: ASSUMPTIONS.md :: A-0003
 
 ## SSOT SCORECARD
 PASS/FAIL is for the SSOT pack itself.

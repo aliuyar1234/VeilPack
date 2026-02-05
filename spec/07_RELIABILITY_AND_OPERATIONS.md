@@ -27,6 +27,7 @@ evidence: spec/11_QUALITY_GATES.md :: G-REL-ATOMIC-COMMIT
   - temp/workdir disk usage
   - archive expansion and recursion depth
   - maximum per-artifact size
+- `limits.v1` baseline knobs include `artifact.max_bytes_per_artifact` and `disk.max_workdir_bytes`.
 - On bound violations, quarantine the artifact (or abort only if continuing would be unsafe).
 
 Gate:

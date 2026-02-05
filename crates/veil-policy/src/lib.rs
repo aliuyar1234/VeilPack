@@ -7,7 +7,7 @@ use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use veil_domain::{PolicyId, Severity};
 
-pub use bundle_id::{compute_policy_id, PolicyBundleIdError};
+pub use bundle_id::{PolicyBundleIdError, compute_policy_id};
 
 pub const POLICY_SCHEMA_V1: &str = "policy.v1";
 

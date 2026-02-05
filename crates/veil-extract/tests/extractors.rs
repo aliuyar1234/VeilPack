@@ -1,4 +1,6 @@
-use veil_domain::{CoverageStatus, QuarantineReasonCode, hash_artifact_id, hash_source_locator_hash};
+use veil_domain::{
+    CoverageStatus, QuarantineReasonCode, hash_artifact_id, hash_source_locator_hash,
+};
 use veil_extract::{ArtifactContext, CanonicalArtifact, ExtractOutcome, ExtractorRegistry};
 
 fn ctx() -> (veil_domain::ArtifactId, veil_domain::SourceLocatorHash) {
@@ -18,7 +20,9 @@ fn text_utf8_extracts_with_full_coverage() {
 
     let out = reg.extract_by_type("TEXT", ctx, b"hello");
     let ExtractOutcome::Extracted {
-        canonical, coverage, ..
+        canonical,
+        coverage,
+        ..
     } = out
     else {
         panic!("expected extracted");
@@ -64,7 +68,9 @@ fn csv_extracts_headers_and_records() {
 
     let out = reg.extract_by_type("CSV", ctx, b"a,b\n1,2\n");
     let ExtractOutcome::Extracted {
-        canonical, coverage, ..
+        canonical,
+        coverage,
+        ..
     } = out
     else {
         panic!("expected extracted");
@@ -92,7 +98,9 @@ fn tsv_extracts_headers_and_records() {
 
     let out = reg.extract_by_type("TSV", ctx, b"a\tb\n1\t2\n");
     let ExtractOutcome::Extracted {
-        canonical, coverage, ..
+        canonical,
+        coverage,
+        ..
     } = out
     else {
         panic!("expected extracted");

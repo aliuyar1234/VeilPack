@@ -35,7 +35,7 @@ DENY_CRATES = {
 
 
 def iter_rust_sources():
-    for p in (ROOT / "crates").rglob("src/**/*.rs"):
+    for p in (ROOT / "crates").rglob("*.rs"):
         if p.is_file():
             yield p
 
@@ -79,4 +79,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

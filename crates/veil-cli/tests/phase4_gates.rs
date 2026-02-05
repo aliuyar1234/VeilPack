@@ -89,7 +89,12 @@ fn read_quarantine_index(pack_root: &Path) -> Vec<QuarantineIndexRecord> {
     out
 }
 
-fn expected_sanitized_path(pack_root: &Path, rel: &str, artifact_bytes: &[u8], ext: &str) -> PathBuf {
+fn expected_sanitized_path(
+    pack_root: &Path,
+    rel: &str,
+    artifact_bytes: &[u8],
+    ext: &str,
+) -> PathBuf {
     let artifact_id = veil_domain::hash_artifact_id(artifact_bytes);
     let source_locator_hash = veil_domain::hash_source_locator_hash(rel);
     let sort_key = veil_domain::ArtifactSortKey::new(artifact_id, source_locator_hash);
@@ -99,10 +104,7 @@ fn expected_sanitized_path(pack_root: &Path, rel: &str, artifact_bytes: &[u8], e
     ))
 }
 
-fn make_zip_bytes(
-    entries: &[(&str, &[u8])],
-    compression: zip::CompressionMethod,
-) -> Vec<u8> {
+fn make_zip_bytes(entries: &[(&str, &[u8])], compression: zip::CompressionMethod) -> Vec<u8> {
     let cursor = Cursor::new(Vec::<u8>::new());
     let mut writer = zip::ZipWriter::new(cursor);
 
@@ -167,6 +169,42 @@ fn make_tar_bytes(path: &str, data: &[u8]) -> Vec<u8> {
     out
 }
 
+fn make_tar_files(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = Vec::<u8>::new();
+    {
+        let mut builder = tar::Builder::new(&mut out);
+        for (path, data) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, *path, Cursor::new(*data))
+                .expect("append tar data");
+        }
+        builder.finish().expect("finish tar");
+    }
+    out
+}
+
+fn make_tar_symlink(path: &str, target: &str) -> Vec<u8> {
+    let mut out = Vec::<u8>::new();
+    {
+        let mut builder = tar::Builder::new(&mut out);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_cksum();
+        builder
+            .append_link(&mut header, path, target)
+            .expect("append symlink");
+        builder.finish().expect("finish tar");
+    }
+    out
+}
+
 #[test]
 fn zip_max_entries_limit_quarantines_entire_archive() {
     let input = TestDir::new("zip_entries_input");
@@ -205,7 +243,9 @@ fn zip_max_entries_limit_quarantines_entire_archive() {
     let recs = read_quarantine_index(output.path());
     let rec = recs
         .iter()
-        .find(|r| r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string())
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string()
+        })
         .expect("find quarantine record");
     assert_eq!(rec.reason_code, "LIMIT_EXCEEDED");
 
@@ -216,10 +256,7 @@ fn zip_max_entries_limit_quarantines_entire_archive() {
 #[test]
 fn zip_unsafe_path_quarantines_entire_archive() {
     let input = TestDir::new("zip_path_input");
-    let zip_bytes = make_zip_bytes(
-        &[("../evil.txt", b"hello")],
-        zip::CompressionMethod::Stored,
-    );
+    let zip_bytes = make_zip_bytes(&[("../evil.txt", b"hello")], zip::CompressionMethod::Stored);
     std::fs::write(input.join("a.zip"), &zip_bytes).expect("write a.zip");
 
     let policy = TestDir::new("zip_path_policy");
@@ -243,12 +280,50 @@ fn zip_unsafe_path_quarantines_entire_archive() {
     let recs = read_quarantine_index(output.path());
     let rec = recs
         .iter()
-        .find(|r| r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string())
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string()
+        })
         .expect("find quarantine record");
     assert_eq!(rec.reason_code, "UNSAFE_PATH");
 
     let sanitized_path = expected_sanitized_path(output.path(), "a.zip", &zip_bytes, "ndjson");
     assert!(!sanitized_path.exists());
+}
+
+#[test]
+fn zip_absolute_path_quarantines_entire_archive() {
+    let input = TestDir::new("zip_abs_path_input");
+    let zip_bytes = make_zip_bytes(
+        &[("/etc/passwd", b"root:x:0:0")],
+        zip::CompressionMethod::Stored,
+    );
+    std::fs::write(input.join("a.zip"), &zip_bytes).expect("write a.zip");
+
+    let policy = TestDir::new("zip_abs_path_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("zip_abs_path_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "UNSAFE_PATH");
 }
 
 #[test]
@@ -282,7 +357,9 @@ fn zip_nested_depth_limit_quarantines_entire_archive() {
     let recs = read_quarantine_index(output.path());
     let rec = recs
         .iter()
-        .find(|r| r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string())
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string()
+        })
         .expect("find quarantine record");
     assert_eq!(rec.reason_code, "LIMIT_EXCEEDED");
 
@@ -294,10 +371,7 @@ fn zip_nested_depth_limit_quarantines_entire_archive() {
 fn zip_expansion_ratio_limit_quarantines_entire_archive() {
     let input = TestDir::new("zip_ratio_input");
     let data = vec![b'A'; 20_000];
-    let zip_bytes = make_zip_bytes(
-        &[("a.txt", &data)],
-        zip::CompressionMethod::Deflated,
-    );
+    let zip_bytes = make_zip_bytes(&[("a.txt", &data)], zip::CompressionMethod::Deflated);
     std::fs::write(input.join("a.zip"), &zip_bytes).expect("write a.zip");
 
     let policy = TestDir::new("zip_ratio_policy");
@@ -328,7 +402,9 @@ fn zip_expansion_ratio_limit_quarantines_entire_archive() {
     let recs = read_quarantine_index(output.path());
     let rec = recs
         .iter()
-        .find(|r| r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string())
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string()
+        })
         .expect("find quarantine record");
     assert_eq!(rec.reason_code, "LIMIT_EXCEEDED");
 }
@@ -368,7 +444,9 @@ fn zip_expanded_bytes_limit_quarantines_entire_archive() {
     let recs = read_quarantine_index(output.path());
     let rec = recs
         .iter()
-        .find(|r| r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string())
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string()
+        })
         .expect("find quarantine record");
     assert_eq!(rec.reason_code, "LIMIT_EXCEEDED");
 }
@@ -399,7 +477,124 @@ fn tar_unsafe_path_quarantines_entire_archive() {
     let recs = read_quarantine_index(output.path());
     let rec = recs
         .iter()
-        .find(|r| r.source_locator_hash == veil_domain::hash_source_locator_hash("a.tar").to_string())
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.tar").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "UNSAFE_PATH");
+}
+
+#[test]
+fn tar_max_entries_limit_quarantines_entire_archive() {
+    let input = TestDir::new("tar_entries_input");
+    let tar_bytes = make_tar_files(&[("a.txt", b"hello"), ("b.txt", b"world")]);
+    std::fs::write(input.join("a.tar"), &tar_bytes).expect("write a.tar");
+
+    let policy = TestDir::new("tar_entries_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let limits = TestDir::new("tar_entries_limits");
+    let limits_json = write_limits_json(
+        &limits,
+        r#"{"schema_version":"limits.v1","archive":{"max_entries_per_archive":1}}"#,
+    );
+
+    let output = TestDir::new("tar_entries_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(limits_json)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.tar").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "LIMIT_EXCEEDED");
+}
+
+#[test]
+fn tar_expanded_bytes_limit_quarantines_entire_archive() {
+    let input = TestDir::new("tar_bytes_input");
+    let tar_bytes = make_tar_bytes("a.txt", b"01234567890"); // 11 bytes
+    std::fs::write(input.join("a.tar"), &tar_bytes).expect("write a.tar");
+
+    let policy = TestDir::new("tar_bytes_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let limits = TestDir::new("tar_bytes_limits");
+    let limits_json = write_limits_json(
+        &limits,
+        r#"{"schema_version":"limits.v1","archive":{"max_expanded_bytes_per_archive":10}}"#,
+    );
+
+    let output = TestDir::new("tar_bytes_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(limits_json)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.tar").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "LIMIT_EXCEEDED");
+}
+
+#[test]
+fn tar_symlink_entry_quarantines_entire_archive() {
+    let input = TestDir::new("tar_symlink_input");
+    let tar_bytes = make_tar_symlink("link.txt", "/etc/passwd");
+    std::fs::write(input.join("a.tar"), &tar_bytes).expect("write a.tar");
+
+    let policy = TestDir::new("tar_symlink_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("tar_symlink_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.tar").to_string()
+        })
         .expect("find quarantine record");
     assert_eq!(rec.reason_code, "UNSAFE_PATH");
 }
@@ -488,7 +683,9 @@ fn eml_unsupported_attachment_quarantines() {
     let recs = read_quarantine_index(output.path());
     let rec = recs
         .iter()
-        .find(|r| r.source_locator_hash == veil_domain::hash_source_locator_hash("a.eml").to_string())
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.eml").to_string()
+        })
         .expect("find quarantine record");
     assert_eq!(rec.reason_code, "UNSUPPORTED_FORMAT");
 }
@@ -566,7 +763,9 @@ fn docx_with_embedded_binary_quarantines_unknown_coverage() {
     let recs = read_quarantine_index(output.path());
     let rec = recs
         .iter()
-        .find(|r| r.source_locator_hash == veil_domain::hash_source_locator_hash("a.docx").to_string())
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.docx").to_string()
+        })
         .expect("find quarantine record");
     assert_eq!(rec.reason_code, "UNKNOWN_COVERAGE");
 }

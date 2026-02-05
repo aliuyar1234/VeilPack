@@ -8,11 +8,11 @@ Veil is a CLI-first batch tool. The CLI is a **public contract** and MUST be ver
 - Purpose: process an input corpus into a Veil Pack.
 - Required flags:
   - `--input <PATH>`: input corpus root (read-only)
-  - `--output <PATH>`: output Veil Pack root (new run: must not exist or must be empty; resume: may be an in-progress Veil Pack for safe resume)
+  - `--output <PATH>`: output Veil Pack root (new run: must not exist or must be empty; resume: may be an in-progress Veil Pack for safe resume; path MUST NOT traverse symlink/reparse components)
   - `--policy <PATH>`: policy bundle directory
 - Optional flags (selected):
-  - `--workdir <PATH>`: work directory (default: `<output>/.veil_work/`)
-  - `--max-workers <N>`: concurrency bound (default: auto from CPU count; capped)
+  - `--workdir <PATH>`: work directory (default: `<output>/.veil_work/`; path MUST NOT traverse symlink/reparse components)
+  - `--max-workers <N>`: worker bound (accepted in v1; baseline execution is deterministic single-worker, and values >1 are advisory for forward compatibility)
   - `--strictness strict`: strict is the only supported baseline in v1 (fail-closed)
   - `--enable-tokenization false|true` (default: false; see D-0004)
   - `--secret-key-file <PATH>` (required if tokenization is true)
@@ -31,24 +31,36 @@ Minimal shape (conceptual):
     "max_entries_per_archive": 100000,
     "max_expansion_ratio": 25,
     "max_expanded_bytes_per_archive": 53687091200
+  },
+  "artifact": {
+    "max_bytes_per_artifact": 268435456
+  },
+  "disk": {
+    "max_workdir_bytes": 1073741824
   }
 }
 ```
 
 Rules:
 - `schema_version` MUST equal `limits.v1`
+- `artifact.max_bytes_per_artifact` MUST be >= 1 when present
+- `disk.max_workdir_bytes` MUST be >= 1 when present
 - Unknown fields MUST be rejected (fail closed)
 
 Decision:
 evidence: DECISIONS.md :: ## D-0012
+evidence: DECISIONS.md :: ## D-0021 - Runtime hardening pass: verify completeness checks, usage redaction, and workdir disk bounds
 
 2) `veil verify`
 - Purpose: verify a Veil Pack output using a policy bundle.
 - Required flags:
-  - `--pack <PATH>`: Veil Pack root
+  - `--pack <PATH>`: Veil Pack root (path MUST NOT traverse symlink/reparse components)
   - `--policy <PATH>`: policy bundle directory
 - Behavior:
   - re-scan VERIFIED outputs and fail if residual HIGH-severity findings exist
+  - refuse unsafe sanitized output paths (symlink/reparse/non-file) during verification and count them as verification failures (fail-closed)
+  - refuse unsafe `pack_manifest.json` / `evidence/artifacts.ndjson` paths (symlink/reparse/non-file) before reading
+  - fail closed if `sanitized/` contains files that are not represented as VERIFIED in `evidence/artifacts.ndjson`
 
 3) `veil policy lint`
 - Purpose: validate policy bundle schema and compute `policy_id`.
@@ -90,6 +102,7 @@ The output directory of `veil run` is the Veil Pack root.
   - `input_corpus_id`
   - whether tokenization enabled and scope (but never the key)
   - whether quarantine raw copying enabled
+  - `ledger_schema_version`
 - `pack_schema_version` MUST equal `"pack.v1"` for layout v1.
 - `sanitized/` MUST contain only VERIFIED artifacts.
 - `quarantine/index.ndjson` MUST contain all QUARANTINED artifacts.

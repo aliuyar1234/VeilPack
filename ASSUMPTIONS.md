@@ -47,3 +47,35 @@ Assumptions are temporary and must be validated or promoted to decisions when ne
 - Risk if wrong: Enterprises may demand custom detectors immediately.
 - How to validate: collect early ICP requirements; measure demand for custom classes.
 - Promote to decision when: plugin ABI and governance are formalized.
+
+---
+
+## A-0006 - Input corpus may mutate during processing (retired)
+- Assumption: Runtime should treat input mutability between discovery and processing as possible, even in local/offline operation.
+- Why: Prevents integrity drift when files are modified concurrently by other processes.
+- Risk if wrong: If mutability is impossible in some deployments, strict checks may quarantine artifacts unnecessarily.
+- How to validate: Observe pilot runs for unexpected identity-mismatch quarantines under normal operations.
+- Promote to decision when: behavior is encoded in runtime and tests.
+- Status: RETIRED (promoted to decision)
+- Decision:
+evidence: DECISIONS.md :: ## D-0018
+
+---
+
+## A-0007 — Audit-only session requires no new behavioral assumptions
+- Assumption: A security audit can be recorded without modifying code or runtime behavior.
+- Why: The current task is reporting-only; no remediation is requested in this session.
+- Risk if wrong: Lack of immediate changes could leave identified gaps unmitigated until explicitly addressed.
+- How to validate: Confirm remediation scope and implement fixes in a follow-up session when requested.
+- Promote to decision when: a remediation plan is approved for implementation.
+- Status: RETIRED (remediation implemented)
+- Decision:
+evidence: DECISIONS.md :: ## D-0020 - Remediation hardening pass: structured logs, resume metadata binding, and path/write safety tightening
+
+---
+
+## Session update - no new assumptions added in D-0021 hardening pass
+- Scope: verification completeness, usage redaction, workdir disk limits, and atomic persistence hardening.
+- Outcome: no new unresolved uncertainty required assumption tracking; behavior encoded as decisions.
+- Decision:
+evidence: DECISIONS.md :: ## D-0021 - Runtime hardening pass: verify completeness checks, usage redaction, and workdir disk bounds

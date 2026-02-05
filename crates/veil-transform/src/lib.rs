@@ -38,18 +38,24 @@ fn transform_csv(policy: &Policy, c: &CanonicalCsv) -> TransformOutcome {
     for (col_idx, header) in headers.iter_mut().enumerate() {
         let transformed = transform_string_value(
             policy,
-            Some(StructuredSelector::CsvColumn(col_idx as u32, &selected_cols_by_class)),
+            Some(StructuredSelector::CsvColumn(
+                col_idx as u32,
+                &selected_cols_by_class,
+            )),
             header,
         );
         *header = transformed;
     }
 
     let mut records = c.records.clone();
-    for (_row_idx, row) in records.iter_mut().enumerate() {
+    for row in records.iter_mut() {
         for (col_idx, cell) in row.iter_mut().enumerate() {
             let transformed = transform_string_value(
                 policy,
-                Some(StructuredSelector::CsvColumn(col_idx as u32, &selected_cols_by_class)),
+                Some(StructuredSelector::CsvColumn(
+                    col_idx as u32,
+                    &selected_cols_by_class,
+                )),
                 cell,
             );
             *cell = transformed;
@@ -88,7 +94,9 @@ fn transform_csv(policy: &Policy, c: &CanonicalCsv) -> TransformOutcome {
         }
     };
 
-    TransformOutcome::Transformed { sanitized_bytes: out }
+    TransformOutcome::Transformed {
+        sanitized_bytes: out,
+    }
 }
 
 fn transform_json(policy: &Policy, value: &Value) -> TransformOutcome {
@@ -96,14 +104,7 @@ fn transform_json(policy: &Policy, value: &Value) -> TransformOutcome {
     let mut pointer = String::new();
 
     let mut out_value = value.clone();
-    if transform_json_value(
-        policy,
-        &selected_by_class,
-        &mut pointer,
-        &mut out_value,
-    )
-    .is_err()
-    {
+    if transform_json_value(policy, &selected_by_class, &mut pointer, &mut out_value).is_err() {
         return TransformOutcome::Quarantined {
             reason: QuarantineReasonCode::InternalError,
         };
@@ -259,10 +260,10 @@ fn transform_json_value(
 
                 let mut new_key = k.clone();
                 for class in policy.classes.iter() {
-                    if let Some(set) = selected_by_class.get(&class.class_id) {
-                        if !set.contains(pointer) {
-                            continue;
-                        }
+                    if let Some(set) = selected_by_class.get(&class.class_id)
+                        && !set.contains(pointer)
+                    {
+                        continue;
                     }
                     let spans = collect_match_spans(class, &new_key);
                     if spans.is_empty() {
@@ -309,10 +310,10 @@ fn transform_json_value(
         Value::String(s) => {
             let mut out = s.clone();
             for class in policy.classes.iter() {
-                if let Some(set) = selected_by_class.get(&class.class_id) {
-                    if !set.contains(pointer) {
-                        continue;
-                    }
+                if let Some(set) = selected_by_class.get(&class.class_id)
+                    && !set.contains(pointer)
+                {
+                    continue;
                 }
                 let spans = collect_match_spans(class, &out);
                 if spans.is_empty() {
@@ -392,7 +393,7 @@ fn mask_keep_last(s: &str, keep_last: usize) -> String {
     }
 
     let mut out = String::new();
-    out.extend(std::iter::repeat('*').take(chars.len() - keep_last));
+    out.extend(std::iter::repeat_n('*', chars.len() - keep_last));
     for ch in chars.iter().skip(chars.len() - keep_last) {
         out.push(*ch);
     }
@@ -455,7 +456,7 @@ fn luhn_ok(digits: &[u8]) -> bool {
         sum += v;
         double = !double;
     }
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 fn canonicalize_json_value(v: &mut Value) {

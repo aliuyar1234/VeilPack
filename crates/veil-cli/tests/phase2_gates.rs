@@ -122,13 +122,99 @@ fn policy_lint_rejects_unknown_fields() {
 }
 
 #[test]
+fn policy_lint_rejects_non_v1_schema_version() {
+    let policy = TestDir::new("policy_lint_schema_mismatch");
+    std::fs::write(
+        policy.join("policy.json"),
+        r#"{"schema_version":"policy.v2","classes":[],"defaults":{},"scopes":[]}"#,
+    )
+    .expect("write policy.json");
+
+    let out = veil_cmd()
+        .args(["policy", "lint", "--policy"])
+        .arg(policy.path())
+        .output()
+        .expect("run veil policy lint");
+    assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
+fn policy_lint_rejects_non_empty_scopes_in_v1_baseline() {
+    let policy = TestDir::new("policy_lint_non_empty_scopes");
+    std::fs::write(
+        policy.join("policy.json"),
+        r#"{
+  "schema_version":"policy.v1",
+  "classes":[{"class_id":"PII.Test","severity":"HIGH","detectors":[{"kind":"regex","pattern":"NO_MATCH"}],"action":{"kind":"REDACT"}}],
+  "defaults":{},
+  "scopes":[{"kind":"field_selector","selector":"json_pointer","fields":["/a"]}]
+}"#,
+    )
+    .expect("write policy.json");
+
+    let out = veil_cmd()
+        .args(["policy", "lint", "--policy"])
+        .arg(policy.path())
+        .output()
+        .expect("run veil policy lint");
+    assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
+fn policy_lint_rejects_tokenize_action_in_v1_baseline() {
+    let policy = TestDir::new("policy_lint_tokenize_action");
+    std::fs::write(
+        policy.join("policy.json"),
+        r#"{
+  "schema_version":"policy.v1",
+  "classes":[{"class_id":"PII.Test","severity":"HIGH","detectors":[{"kind":"regex","pattern":"NO_MATCH"}],"action":{"kind":"TOKENIZE"}}],
+  "defaults":{},
+  "scopes":[]
+}"#,
+    )
+    .expect("write policy.json");
+
+    let out = veil_cmd()
+        .args(["policy", "lint", "--policy"])
+        .arg(policy.path())
+        .output()
+        .expect("run veil policy lint");
+    assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
+fn policy_lint_rejects_mask_keep_last_zero() {
+    let policy = TestDir::new("policy_lint_mask_zero");
+    std::fs::write(
+        policy.join("policy.json"),
+        r#"{
+  "schema_version":"policy.v1",
+  "classes":[{"class_id":"PII.Test","severity":"HIGH","detectors":[{"kind":"regex","pattern":"NO_MATCH"}],"action":{"kind":"MASK","keep_last":0}}],
+  "defaults":{},
+  "scopes":[]
+}"#,
+    )
+    .expect("write policy.json");
+
+    let out = veil_cmd()
+        .args(["policy", "lint", "--policy"])
+        .arg(policy.path())
+        .output()
+        .expect("run veil policy lint");
+    assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
 fn verify_refuses_on_policy_id_mismatch() {
     let input = TestDir::new("verify_mismatch_input");
     std::fs::write(input.join("a.txt"), "hello").expect("write input file");
 
     let policy_a = TestDir::new("verify_mismatch_policy_a");
-    std::fs::write(policy_a.join("policy.json"), minimal_policy_json("NO_MATCH_A"))
-        .expect("write policy.json");
+    std::fs::write(
+        policy_a.join("policy.json"),
+        minimal_policy_json("NO_MATCH_A"),
+    )
+    .expect("write policy.json");
 
     let output = TestDir::new("verify_mismatch_output");
     let out = veil_cmd()
@@ -151,8 +237,11 @@ fn verify_refuses_on_policy_id_mismatch() {
     assert_eq!(pack_manifest.policy_id, expected_policy_id.to_string());
 
     let policy_b = TestDir::new("verify_mismatch_policy_b");
-    std::fs::write(policy_b.join("policy.json"), minimal_policy_json("NO_MATCH_B"))
-        .expect("write policy.json");
+    std::fs::write(
+        policy_b.join("policy.json"),
+        minimal_policy_json("NO_MATCH_B"),
+    )
+    .expect("write policy.json");
 
     let out = veil_cmd()
         .arg("verify")
@@ -164,6 +253,134 @@ fn verify_refuses_on_policy_id_mismatch() {
         .expect("run veil verify");
 
     assert_eq!(out.status.code(), Some(3));
+}
+
+#[cfg(unix)]
+#[test]
+fn verify_fails_closed_when_sanitized_output_is_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let input = TestDir::new("verify_symlink_input");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy = TestDir::new("verify_symlink_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("verify_symlink_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+    assert_eq!(out.status.code(), Some(0));
+
+    let sanitized_file = std::fs::read_dir(output.join("sanitized"))
+        .expect("read sanitized dir")
+        .map(|e| e.expect("entry").path())
+        .find(|p| p.is_file())
+        .expect("find sanitized file");
+
+    let external = TestDir::new("verify_symlink_external");
+    let external_file = external.join("outside.txt");
+    std::fs::write(&external_file, "outside").expect("write external");
+
+    std::fs::remove_file(&sanitized_file).expect("remove sanitized");
+    symlink(&external_file, &sanitized_file).expect("symlink sanitized -> external");
+
+    let verify = veil_cmd()
+        .arg("verify")
+        .arg("--pack")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil verify");
+    assert_eq!(verify.status.code(), Some(2));
+}
+
+#[test]
+fn verify_fails_closed_on_unexpected_sanitized_output_file() {
+    let input = TestDir::new("verify_extra_output_input");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy = TestDir::new("verify_extra_output_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("verify_extra_output_pack");
+    let run = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+    assert_eq!(run.status.code(), Some(0));
+
+    std::fs::write(output.join("sanitized").join("rogue.txt"), "ROGUE")
+        .expect("write unexpected sanitized file");
+
+    let verify = veil_cmd()
+        .arg("verify")
+        .arg("--pack")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil verify");
+    assert_eq!(verify.status.code(), Some(2));
+}
+
+#[cfg(unix)]
+#[test]
+fn verify_refuses_when_artifacts_evidence_path_is_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let input = TestDir::new("verify_artifacts_symlink_input");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy = TestDir::new("verify_artifacts_symlink_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("verify_artifacts_symlink_output");
+    let run = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+    assert_eq!(run.status.code(), Some(0));
+
+    let artifacts_path = output.join("evidence").join("artifacts.ndjson");
+    let external = TestDir::new("verify_artifacts_symlink_external");
+    let external_file = external.join("outside.ndjson");
+    std::fs::write(&external_file, "").expect("write external file");
+    std::fs::remove_file(&artifacts_path).expect("remove artifacts.ndjson");
+    symlink(&external_file, &artifacts_path).expect("symlink artifacts.ndjson");
+
+    let verify = veil_cmd()
+        .arg("verify")
+        .arg("--pack")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil verify");
+    assert_eq!(verify.status.code(), Some(1));
 }
 
 #[test]

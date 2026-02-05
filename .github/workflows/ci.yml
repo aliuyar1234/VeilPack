@@ -4,16 +4,20 @@ on:
   pull_request:
   push:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Format
@@ -22,9 +26,22 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
 
+      - name: Offline Static Enforcement
+        run: python3 checks/offline_enforcement.py
+
       - name: Test
         run: cargo test --workspace
+
+      - name: Offline Runtime Enforcement
+        run: cargo test -p veil-cli --test offline_enforcement
 
       - name: Boundary Fitness
         run: python3 checks/boundary_fitness.py
 
+      - name: SSOT Validate
+        run: python3 checks/ssot_validate.py all
+
+      - name: Manifest Verify
+        run: |
+          python3 checks/generate_manifest.py
+          git diff --exit-code MANIFEST.sha256

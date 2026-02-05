@@ -41,13 +41,13 @@ flowchart LR
 ## Component Boundary Table (normative)
 | Component | Responsibilities | MUST NOT |
 |---|---|---|
-| Ingest + Fingerprint | enumerate corpus deterministically; compute artifact_id and source_locator_hash; schedule work | parse formats; emit outputs |
+| Ingest + Fingerprint | enumerate corpus deterministically; compute artifact_id and source_locator_hash; schedule work; revalidate processed bytes against discovered artifact identity | parse formats; emit outputs |
 | Policy Bundle Loader | load and hash policy bundle; compile detectors; validate policy schema | mutate policy; proceed on invalid policy |
 | Extractor | parse artifact to canonical representation; emit CoverageMap v1 | claim FULL coverage when UNKNOWN; emit plaintext secrets to logs/evidence |
 | Detector Engine | run detectors over canonical representation; produce findings | read/write filesystem |
-| Transformer/Rewriter | apply transforms; write outputs to staging; atomic commit; apply deterministic output path mapping | overwrite inputs; emit partial outputs on failure |
+| Transformer/Rewriter | apply transforms; write outputs to staging; atomic commit; apply deterministic output path mapping | overwrite inputs; emit partial outputs on failure; write through unsafe output/workdir path components |
 | Residual Verification | re-scan outputs; quarantine on residual; enforce VERIFIED definition | mark VERIFIED without verification |
-| Evidence Builder | emit non-sensitive evidence and manifests; bind to policy_id and run_id | store plaintext sensitive values |
+| Evidence Builder | emit non-sensitive evidence and manifests; bind to policy_id and run_id; emit structured JSON logs with stable event schema | store plaintext sensitive values |
 | Ledger | persist resumability state machine; record non-sensitive metadata | store plaintext sensitive values |
 
 Evidence proof tokens (optional, non-sensitive correlation aids):
@@ -58,7 +58,9 @@ evidence: DECISIONS.md :: ## D-0016 — Proof token emission binding (v1)
 - VERIFIED implies:
   - CoverageMap v1 has no UNKNOWN surfaces
   - post-transform verification pass succeeded
+- Processed bytes MUST match discovered `artifact_id` and discovered size; mismatches MUST quarantine.
 - If any stage cannot safely complete, artifact MUST be quarantined (or run aborts only if continuing would be unsafe).
+- Verification MUST fail closed for unsafe pack output paths (symlink/reparse/non-file) rather than dereferencing them.
 
 Canonical state semantics:
 evidence: spec/03_DOMAIN_MODEL.md :: Artifact State Machine
@@ -92,6 +94,8 @@ evidence: DECISIONS.md :: ## D-0009
 - Output:
   - canonical representation (text segments and/or structured fields and/or metadata)
   - CoverageMap v1 (D-0002)
+- Runtime limits include bounded in-memory reads via `max_bytes_per_artifact`.
+- CLI orchestration limits include bounded workdir/staging disk usage via `disk.max_workdir_bytes`.
 - If extractor cannot safely parse or cannot provide CoverageMap v1, it MUST return QUARANTINE with a reason code.
 
 Coverage decision:

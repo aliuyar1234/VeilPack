@@ -22,9 +22,8 @@ fn luhn_detector_finds_candidate_in_text() {
         }],
     };
 
-    let canonical = CanonicalArtifact::Text(CanonicalText::new(
-        "card 4111-1111-1111-1111".to_string(),
-    ));
+    let canonical =
+        CanonicalArtifact::Text(CanonicalText::new("card 4111-1111-1111-1111".to_string()));
 
     let findings = DetectorEngineV1.detect(&policy, &canonical, None);
     assert!(!findings.is_empty());

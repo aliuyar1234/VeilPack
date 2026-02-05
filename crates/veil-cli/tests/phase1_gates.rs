@@ -77,7 +77,11 @@ fn snapshot_files(root: &Path) -> BTreeMap<String, String> {
             let path = e.path();
             let rel = path.strip_prefix(root).expect("strip_prefix");
 
-            if rel.components().next().is_some_and(|c| c.as_os_str() == ".veil_work") {
+            if rel
+                .components()
+                .next()
+                .is_some_and(|c| c.as_os_str() == ".veil_work")
+            {
                 continue;
             }
 
@@ -181,14 +185,23 @@ fn no_plaintext_canary_leaks_to_logs_or_evidence() {
 
     let artifacts_ndjson =
         std::fs::read_to_string(output.join("evidence").join("artifacts.ndjson")).unwrap();
-    assert!(!artifacts_ndjson.contains(canary), "artifacts.ndjson leaked canary");
+    assert!(
+        !artifacts_ndjson.contains(canary),
+        "artifacts.ndjson leaked canary"
+    );
 
     let quarantine_index =
         std::fs::read_to_string(output.join("quarantine").join("index.ndjson")).unwrap();
-    assert!(!quarantine_index.contains(canary), "quarantine index leaked canary");
+    assert!(
+        !quarantine_index.contains(canary),
+        "quarantine index leaked canary"
+    );
 
     let pack_manifest = std::fs::read_to_string(output.join("pack_manifest.json")).unwrap();
-    assert!(!pack_manifest.contains(canary), "pack_manifest leaked canary");
+    assert!(
+        !pack_manifest.contains(canary),
+        "pack_manifest leaked canary"
+    );
 
     // Verify sanitized output does not contain the canary.
     let sanitized_dir = output.join("sanitized");
@@ -207,6 +220,48 @@ fn no_plaintext_canary_leaks_to_logs_or_evidence() {
         sanitized_text.contains("{{PII.Canary}}"),
         "expected redact marker"
     );
+}
+
+#[test]
+fn logs_use_structured_json_schema_v1() {
+    let input = TestDir::new("log_schema_input");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input");
+
+    let policy = TestDir::new("log_schema_policy");
+    std::fs::write(
+        policy.join("policy.json"),
+        policy_json_single_class("NO_MATCH", r#"{ "kind": "REDACT" }"#),
+    )
+    .expect("write policy.json");
+
+    let output = TestDir::new("log_schema_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+    assert_eq!(out.status.code(), Some(0));
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let mut saw_any = false;
+    for line in stderr.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        saw_any = true;
+        let v: serde_json::Value = serde_json::from_str(line).expect("stderr line must be json");
+        assert!(v.get("level").is_some(), "missing level");
+        assert!(v.get("event").is_some(), "missing event");
+        assert!(v.get("run_id").is_some(), "missing run_id");
+        assert!(v.get("policy_id").is_some(), "missing policy_id");
+    }
+    assert!(saw_any, "expected structured log lines on stderr");
 }
 
 #[test]

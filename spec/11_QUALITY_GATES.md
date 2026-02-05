@@ -16,7 +16,7 @@ No Evidence, No Accept / No Progress.
 - Why: air-gapped compatibility; prevent exfiltration.
 - Verify:
   - Static: dependency and code scan for network APIs.
-  - Runtime: integration test that executes `veil run` against a fixture corpus in a network-denied environment and asserts no network attempts.
+  - Runtime: integration test that executes `veil run` against a fixture corpus under denied-network posture and asserts no process socket activity.
   - Static scan command: `python checks/offline_enforcement.py`
   - Runtime smoke command: `cargo test -p veil-cli --test offline_enforcement`
 - Pass/fail:
@@ -31,6 +31,7 @@ Check IDs:
 - Why: prevent silent unsafe passes.
 - Verify:
   - End-to-end test asserts: for a mixed corpus, every artifact ends VERIFIED or QUARANTINED; no other terminal states.
+  - Input identity mismatch (discovered vs processed bytes/size) is detected and quarantined.
 - Pass/fail:
   - PASS if the test confirms the invariant for all artifacts.
 - Evidence:
@@ -43,6 +44,7 @@ evidence: PROGRESS.md :: G-SEC-FAIL-CLOSED-TERMINAL
     - logs
     - evidence outputs
     - quarantine index
+  - Structured log schema test asserts stderr logs are JSON lines containing required fields (`level`, `event`, `run_id`, `policy_id`).
 - Pass/fail:
   - PASS if canary strings are absent.
 - Evidence:
@@ -50,6 +52,7 @@ evidence: PROGRESS.md :: G-SEC-NO-PLAINTEXT-LEAKS
 
 Check IDs:
 - CHK-NO-PLAINTEXT-LEAKS
+- CHK-LOG-SCHEMA
 
 ### G-SEC-POLICY-ID-IMMUTABLE
 - Why: prevent policy drift across resume/verify.
@@ -134,7 +137,10 @@ evidence: DECISIONS.md :: ## D-0014
 - Verify:
   - tests that trigger each archive limit and assert quarantine of the archive artifact.
   - tests that attempt path traversal and assert quarantine.
+  - tests that enforce `max_bytes_per_artifact` and assert over-limit artifacts are quarantined.
+  - tests that enforce `disk.max_workdir_bytes` and assert over-limit artifacts are quarantined fail-closed.
   - Phase 4 archive limits suite: `cargo test -p veil-cli --test phase4_gates`
+  - Limits schema + per-artifact/workdir bound suite: `cargo test -p veil-cli --test limits_json`
 - Pass/fail:
   - PASS if all violations quarantine and no partial emission occurs.
 - Evidence:
@@ -144,6 +150,7 @@ evidence: PROGRESS.md :: G-REL-ARCHIVE-LIMITS
 - Why: avoid partial sanitized outputs on crash.
 - Verify:
   - integration test that forces failure mid-write and asserts `sanitized/` contains no partial files.
+  - CLI rejects unsafe output/workdir paths (symlink/reparse components) before processing.
 - Pass/fail:
   - PASS if atomicity invariant holds.
 - Evidence:

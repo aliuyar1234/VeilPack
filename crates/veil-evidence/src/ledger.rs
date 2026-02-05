@@ -123,6 +123,10 @@ COMMIT;
             .map_err(|_| LedgerError::Sql)
     }
 
+    pub fn upsert_meta(&self, key: &str, value: &str) -> Result<(), LedgerError> {
+        self.set_meta(key, value)
+    }
+
     pub fn artifact_summary(
         &self,
         artifact_id: &ArtifactId,

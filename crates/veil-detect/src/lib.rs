@@ -1,7 +1,9 @@
 use blake3::Hasher;
 use serde_json::Value;
 use veil_domain::{Digest32, Severity};
-use veil_extract::{CanonicalArtifact, CanonicalCsv, CanonicalJson, CanonicalNdjson, CanonicalText};
+use veil_extract::{
+    CanonicalArtifact, CanonicalCsv, CanonicalJson, CanonicalNdjson, CanonicalText,
+};
 use veil_policy::{CompiledDetector, FieldSelectorKind, Policy, PolicyClass};
 
 const PROOF_TOKEN_DOMAIN: &[u8] = b"veil.proof.v1";
@@ -113,7 +115,10 @@ fn detect_csv(policy: &Policy, c: &CanonicalCsv, proof_key: Option<&[u8; 32]>) -
     out
 }
 
-fn build_csv_selection(policy: &Policy, c: &CanonicalCsv) -> std::collections::BTreeMap<String, Vec<u32>> {
+fn build_csv_selection(
+    policy: &Policy,
+    c: &CanonicalCsv,
+) -> std::collections::BTreeMap<String, Vec<u32>> {
     let mut by_class = std::collections::BTreeMap::<String, Vec<u32>>::new();
 
     for class in policy.classes.iter() {
@@ -157,7 +162,9 @@ fn detect_json(policy: &Policy, j: &CanonicalJson, proof_key: Option<&[u8; 32]>)
     out
 }
 
-fn build_json_selection(policy: &Policy) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+fn build_json_selection(
+    policy: &Policy,
+) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
     let mut by_class =
         std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
 
@@ -168,7 +175,11 @@ fn build_json_selection(policy: &Policy) -> std::collections::BTreeMap<String, s
         if sel.kind != FieldSelectorKind::JsonPointer {
             continue;
         }
-        let set = sel.fields.iter().cloned().collect::<std::collections::BTreeSet<_>>();
+        let set = sel
+            .fields
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
         by_class.insert(class.class_id.clone(), set);
     }
 
@@ -194,10 +205,10 @@ fn walk_json(
                 key_pointer.push('/');
                 key_pointer.push_str(&escaped);
                 for class in policy.classes.iter() {
-                    if let Some(set) = selected_by_class.get(&class.class_id) {
-                        if !set.contains(&key_pointer) {
-                            continue;
-                        }
+                    if let Some(set) = selected_by_class.get(&class.class_id)
+                        && !set.contains(&key_pointer)
+                    {
+                        continue;
                     }
                     detect_in_str(
                         class,
@@ -225,16 +236,24 @@ fn walk_json(
                 let old_len = pointer.len();
                 pointer.push('/');
                 pointer.push_str(&idx.to_string());
-                walk_json(kind, policy, selected_by_class, pointer, item, proof_key, out);
+                walk_json(
+                    kind,
+                    policy,
+                    selected_by_class,
+                    pointer,
+                    item,
+                    proof_key,
+                    out,
+                );
                 pointer.truncate(old_len);
             }
         }
         Value::String(s) => {
             for class in policy.classes.iter() {
-                if let Some(set) = selected_by_class.get(&class.class_id) {
-                    if !set.contains(pointer) {
-                        continue;
-                    }
+                if let Some(set) = selected_by_class.get(&class.class_id)
+                    && !set.contains(pointer)
+                {
+                    continue;
                 }
 
                 detect_in_str(
@@ -290,7 +309,8 @@ fn detect_in_str(
         match det {
             CompiledDetector::Regex(re) => {
                 for m in re.find_iter(s) {
-                    let proof_token = proof_key.map(|k| compute_proof_token(k, m.as_str().as_bytes()));
+                    let proof_token =
+                        proof_key.map(|k| compute_proof_token(k, m.as_str().as_bytes()));
                     out.push(Finding {
                         class_id: class.class_id.clone(),
                         severity: class.severity,
@@ -392,7 +412,7 @@ fn luhn_ok(digits: &[u8]) -> bool {
         sum += v;
         double = !double;
     }
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 fn json_pointer_escape(s: &str) -> String {

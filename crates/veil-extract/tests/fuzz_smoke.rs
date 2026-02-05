@@ -1,6 +1,8 @@
 use std::io::{Cursor, Write};
 
-use veil_domain::{ArchiveLimits, QuarantineReasonCode, hash_artifact_id, hash_source_locator_hash};
+use veil_domain::{
+    ArchiveLimits, QuarantineReasonCode, hash_artifact_id, hash_source_locator_hash,
+};
 use veil_extract::{ArtifactContext, ExtractOutcome, ExtractorRegistry};
 use zip::write::FileOptions;
 
@@ -51,8 +53,7 @@ fn make_zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let cursor = Cursor::new(Vec::<u8>::new());
     let mut writer = zip::ZipWriter::new(cursor);
 
-    let options =
-        FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
     for (name, data) in entries {
         writer.start_file(*name, options).expect("start zip file");
         writer.write_all(data).expect("write zip data");
@@ -178,4 +179,3 @@ fn archive_limits_are_enforced() {
     };
     assert_eq!(reason, QuarantineReasonCode::LimitExceeded);
 }
-

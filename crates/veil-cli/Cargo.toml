@@ -19,7 +19,6 @@ veil-verify = { path = "../veil-verify" }
 [dev-dependencies]
 base64 = "0.22"
 tar = "0.4"
-wait-timeout = "0.2"
 zip = "0.6"
 
 [[bin]]

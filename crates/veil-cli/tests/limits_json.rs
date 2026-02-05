@@ -64,6 +64,11 @@ impl Drop for TestDir {
     }
 }
 
+fn quarantine_index_text(pack_root: &Path) -> String {
+    std::fs::read_to_string(pack_root.join("quarantine").join("index.ndjson"))
+        .expect("read quarantine index")
+}
+
 #[test]
 fn run_accepts_valid_limits_json() {
     let input = TestDir::new("input_limits_ok");
@@ -79,7 +84,7 @@ fn run_accepts_valid_limits_json() {
     let limits_path = limits.join("limits.json");
     std::fs::write(
         &limits_path,
-        br#"{"schema_version":"limits.v1","archive":{"max_expansion_ratio":25}}"#,
+        br#"{"schema_version":"limits.v1","archive":{"max_expansion_ratio":25},"artifact":{"max_bytes_per_artifact":1024},"disk":{"max_workdir_bytes":1048576}}"#,
     )
     .expect("write limits.json");
 
@@ -98,6 +103,43 @@ fn run_accepts_valid_limits_json() {
 
     // Valid limits-json should pass validation and complete.
     assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
+fn run_quarantines_artifact_exceeding_max_bytes_per_artifact() {
+    let input = TestDir::new("input_limits_artifact_size");
+    std::fs::write(input.join("a.txt"), "0123456789ABCDEF").expect("write input file");
+
+    let policy = TestDir::new("policy_limits_artifact_size");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("output_limits_artifact_size");
+
+    let limits = TestDir::new("limits_artifact_size");
+    let limits_path = limits.join("limits.json");
+    std::fs::write(
+        &limits_path,
+        br#"{"schema_version":"limits.v1","artifact":{"max_bytes_per_artifact":8}}"#,
+    )
+    .expect("write limits.json");
+
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(&limits_path)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let q = quarantine_index_text(output.path());
+    assert!(q.contains("\"reason_code\":\"LIMIT_EXCEEDED\""));
 }
 
 #[test]
@@ -164,4 +206,109 @@ fn run_rejects_limits_json_unknown_fields() {
         .expect("run veil run");
 
     assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
+fn run_rejects_limits_json_unknown_nested_fields() {
+    let input = TestDir::new("input_limits_unknown_nested");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy = TestDir::new("policy_limits_unknown_nested");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("output_limits_unknown_nested");
+    let limits = TestDir::new("limits_unknown_nested");
+    let limits_path = limits.join("limits.json");
+    std::fs::write(
+        &limits_path,
+        br#"{"schema_version":"limits.v1","archive":{"unknown":1},"artifact":{"also_unknown":2}}"#,
+    )
+    .expect("write limits.json");
+
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(&limits_path)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
+fn run_rejects_limits_json_zero_values() {
+    let input = TestDir::new("input_limits_zero_values");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy = TestDir::new("policy_limits_zero_values");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("output_limits_zero_values");
+    let limits = TestDir::new("limits_zero_values");
+    let limits_path = limits.join("limits.json");
+    std::fs::write(
+        &limits_path,
+        br#"{"schema_version":"limits.v1","archive":{"max_expansion_ratio":0,"max_expanded_bytes_per_archive":0},"artifact":{"max_bytes_per_artifact":0},"disk":{"max_workdir_bytes":0}}"#,
+    )
+    .expect("write limits.json");
+
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(&limits_path)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
+fn run_quarantines_when_workdir_limit_would_be_exceeded() {
+    let input = TestDir::new("input_limits_workdir");
+    std::fs::write(input.join("a.txt"), "X".repeat(1024)).expect("write input file");
+
+    let policy = TestDir::new("policy_limits_workdir");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("output_limits_workdir");
+
+    let limits = TestDir::new("limits_workdir");
+    let limits_path = limits.join("limits.json");
+    std::fs::write(
+        &limits_path,
+        br#"{"schema_version":"limits.v1","disk":{"max_workdir_bytes":200}}"#,
+    )
+    .expect("write limits.json");
+
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(&limits_path)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let q = quarantine_index_text(output.path());
+    assert!(q.contains("\"reason_code\":\"LIMIT_EXCEEDED\""));
 }

@@ -623,7 +623,7 @@ evidence: spec/11_QUALITY_GATES.md :: G-SEC-POLICY-ID-IMMUTABLE
 
 ---
 
-## D-0012 — `--limits-json` schema v1 (archive limits overrides)
+## D-0012 — `--limits-json` schema v1 (archive + artifact limits overrides)
 
 ### Decision statement
 The `--limits-json` file is a UTF-8 JSON object with:
@@ -633,6 +633,8 @@ The `--limits-json` file is a UTF-8 JSON object with:
   - `max_entries_per_archive` (u32)
   - `max_expansion_ratio` (u32, MUST be >= 1)
   - `max_expanded_bytes_per_archive` (u64, MUST be >= 1)
+- optional: `artifact` object with optional numeric overrides:
+  - `max_bytes_per_artifact` (u64, MUST be >= 1)
 
 Unknown fields at any level MUST be rejected (fail closed).
 
@@ -648,6 +650,7 @@ Unknown fields at any level MUST be rejected (fail closed).
 
 ### Implications (what it affects)
 - `veil run` must refuse to start if the file is not valid UTF-8 JSON, has an unknown schema_version, or contains unknown keys.
+- Limits parsing now covers both archive-level and per-artifact bounds.
 
 ### Affected files
 - crates/veil-cli/src/main.rs
@@ -656,6 +659,7 @@ Unknown fields at any level MUST be rejected (fail closed).
 ### Verification impact
 - Must exist:
   - CLI tests for schema_version and unknown fields rejection
+  - CLI test for `max_bytes_per_artifact` over-limit quarantine behavior
 - Gates/checks:
 evidence: spec/11_QUALITY_GATES.md :: G-REL-ARCHIVE-LIMITS
 
@@ -976,3 +980,279 @@ evidence: spec/11_QUALITY_GATES.md :: G-SEC-COVERAGE-ENFORCED
 
 ### Fail-closed baseline behavior
 - On any container parse error, limit violation, unsafe path, or unsupported substructure, the artifact MUST be QUARANTINED.
+
+---
+
+## D-0018 — Hardening baseline: per-artifact memory bounds, identity revalidation, and unsafe output-path refusal
+
+### Decision statement
+- Extend `limits.v1` with an optional artifact section:
+  - `artifact.max_bytes_per_artifact` (u64, must be >= 1 when present).
+- Introduce a default per-artifact in-memory bound:
+  - `max_bytes_per_artifact = 268435456` (256 MiB) when not overridden.
+- Runtime MUST enforce per-artifact bounds fail-closed:
+  - top-level artifact reads in CLI are bounded.
+  - extractor reads for OOXML parts, ZIP/TAR entries, and email attachment payloads are bounded.
+  - bound violations MUST quarantine with `LIMIT_EXCEEDED`.
+- Runtime MUST revalidate discovered artifact identity at processing time:
+  - processed bytes and size must match discovered `artifact_id` and discovered size.
+  - mismatches quarantine with `INTERNAL_ERROR` (fail-closed baseline without introducing a new reason code in v1).
+- CLI MUST refuse unsafe output/workdir locations:
+  - reject symlink/reparse components in output/workdir path traversal.
+  - refuse writes when output targets resolve through unsafe components.
+- Offline runtime gate baseline is hardened:
+  - runtime offline test monitors the process for socket activity while `veil run` executes under denied-network posture.
+- CI supply-chain baseline is hardened:
+  - pin GitHub Actions to immutable commit SHAs and use least-privilege workflow permissions.
+
+### Rationale
+- Enforces the SSOT requirement for maximum per-artifact resource bounds (C-005, spec/07).
+- Closes identity TOCTOU gap between discovery hashing and processing reads.
+- Reduces write-what-where exposure from symlink/reparse path indirection in output/workdir.
+- Makes offline runtime verification materially stronger than completion-time smoke checks.
+- Improves CI supply-chain integrity without changing product runtime behavior.
+
+### Alternatives considered
+- Keep archive-only limits and rely on OS memory pressure behavior:
+  - rejected: does not satisfy explicit max per-artifact bound requirement.
+- Abort entire run on artifact identity mismatch:
+  - rejected for v1 baseline: spec/07 favors per-artifact quarantine for non-fatal artifact-level failures.
+- Preserve workflow tags (e.g., `@v4`, `@stable`) in CI:
+  - rejected: mutable references weaken supply-chain guarantees.
+
+### Implications (what it affects)
+- `--limits-json` contract now includes an artifact-bound field.
+- Large single artifacts/entries now fail-closed via quarantine rather than unbounded memory growth.
+- Output/workdir path validation is stricter and may reject previously accepted unsafe path indirection.
+- Offline gate evidence quality improves by observing runtime socket activity directly.
+
+### Affected files
+- spec/02_ARCHITECTURE.md
+- spec/04_INTERFACES_AND_CONTRACTS.md
+- spec/11_QUALITY_GATES.md
+- crates/veil-domain/src/config.rs
+- crates/veil-cli/src/main.rs
+- crates/veil-cli/tests/limits_json.rs
+- crates/veil-cli/tests/offline_enforcement.rs
+- crates/veil-cli/tests/cli_smoke.rs
+- crates/veil-extract/src/lib.rs
+- checks/offline_enforcement.py
+- .github/workflows/ci.yml
+
+### Verification impact
+- Must exist:
+  - tests for per-artifact bound enforcement (`limits_json`).
+  - tests for identity mismatch detection.
+  - tests for unsafe output/workdir path refusal.
+  - offline runtime test with socket-activity monitoring.
+- Gates/checks:
+evidence: spec/11_QUALITY_GATES.md :: G-REL-ARCHIVE-LIMITS
+evidence: spec/11_QUALITY_GATES.md :: G-SEC-FAIL-CLOSED-TERMINAL
+evidence: spec/11_QUALITY_GATES.md :: G-REL-ATOMIC-COMMIT
+evidence: spec/11_QUALITY_GATES.md :: G-SEC-OFFLINE-NO-NET
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: YES (artifact IO, output emission, offline enforcement)
+- unsafe/high-risk: YES (memory exhaustion, integrity drift, path indirection)
+- conservative baseline available: YES (strict bounds + quarantine/refusal)
+- safe to decide: YES (fully testable with local fixtures)
+
+### Conservative baseline
+- YES (bounded reads, identity revalidation quarantine, unsafe path refusal, pinned CI actions)
+
+### Fail-closed baseline behavior
+- On over-limit artifacts/entries: QUARANTINE (`LIMIT_EXCEEDED`).
+- On discovered/processed identity mismatch: QUARANTINE (`INTERNAL_ERROR`).
+- On unsafe output/workdir path traversal: refuse to start (usage error) or quarantine on write-path safety failure.
+
+---
+
+## D-0019 — Security audit session log (no behavior change)
+
+### Decision statement
+- Record that a security audit of the current codebase was performed and no product behavior changes were made in this session.
+
+### Rationale
+- Provides an audit trail for review activity without implying implementation changes.
+
+### Implications (what it affects)
+- None.
+
+### Verification impact
+- None.
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: NO
+- unsafe/high-risk: NO
+- conservative baseline available: N/A
+- safe to decide: YES
+
+---
+
+## D-0020 - Remediation hardening pass: structured logs, resume metadata binding, and path/write safety tightening
+
+### Decision statement
+- Enforce structured JSON stderr logging in `veil-cli` runtime paths:
+  - log records include `level`, `event`, `run_id`, and `policy_id`.
+  - runtime counters are emitted for `run_started`, `run_completed`, `verify_started`, and `verify_completed`.
+- Tighten resume metadata consistency:
+  - ledger meta now stores and validates `proof_scope`, `proof_key_commitment`, `tokenization_enabled`, and `tokenization_scope`.
+  - resume fails usage validation on mismatches; missing keys are seeded for compatibility.
+  - resume now fails closed when existing `artifacts.ndjson` proof-token records are unreadable/invalid.
+- Tighten filesystem safety:
+  - input enumeration rejects symlink/reparse entries via `symlink_metadata`.
+  - verify rejects unsafe sanitized output paths (symlink/reparse/non-file) and counts them as verification failures.
+  - quarantine index and artifacts evidence writers now validate path component safety before persist.
+  - atomic writers additionally reject unsafe temp/target symlink reparse paths before rename.
+  - quarantine raw copy failures are now fail-closed (`EXIT_FATAL`) when `--quarantine-copy=true`.
+- Harden archive accounting against forged size metadata:
+  - ZIP/OOXML/TAR aggregate expanded-byte checks now use observed bytes read, not only header size metadata.
+- Clarify `--max-workers` semantics in v1:
+  - accepted as advisory input (`>=1`) with explicit warning when `>1`.
+  - v1 baseline remains deterministic single-worker.
+
+### Rationale
+- Closes SSOT/implementation drift in observability schema requirements (spec/08).
+- Prevents silent evidence degradation on resume and strengthens proof-binding continuity.
+- Reduces write-redirection exposure from symlink/reparse races in evidence/output paths.
+- Improves fail-closed behavior in verification and quarantine-copy persistence.
+- Reduces archive-limit bypass risk from untrusted header values.
+
+### Alternatives considered
+- Keep plain stderr text logs and rely only on evidence files:
+  - rejected: violates structured log contract and weakens operational correlation.
+- Continue best-effort resume when proof-token evidence is unreadable:
+  - rejected: can silently drop proof-token continuity.
+- Introduce multi-threaded processing immediately for `--max-workers`:
+  - rejected for this pass due determinism/ledger coupling risk; baseline remains single-worker with explicit advisory semantics.
+
+### Implications (what it affects)
+- Runtime stderr format is now structured JSON events.
+- Resume contracts include proof/tokenization metadata consistency checks.
+- Verification is stricter for unsafe sanitized output path types.
+- Evidence writing and atomic persistence paths apply stricter safety checks.
+- Archive-limit behavior relies on observed expanded bytes and remains fail-closed.
+
+### Affected files
+- spec/02_ARCHITECTURE.md
+- spec/04_INTERFACES_AND_CONTRACTS.md
+- spec/11_QUALITY_GATES.md
+- checks/CHECKS_INDEX.md
+- .github/workflows/ci.yml
+- crates/veil-cli/src/main.rs
+- crates/veil-evidence/src/ledger.rs
+- crates/veil-extract/src/lib.rs
+- crates/veil-cli/tests/cli_smoke.rs
+- crates/veil-cli/tests/limits_json.rs
+- crates/veil-cli/tests/phase1_gates.rs
+- crates/veil-cli/tests/phase2_gates.rs
+- crates/veil-cli/tests/phase4_gates.rs
+- crates/veil-cli/tests/phase5_gates.rs
+
+### Verification impact
+- Must exist:
+  - log-schema integration test for stderr JSON required fields.
+  - resume invalid-evidence fail-closed test.
+  - unsafe verify path test (symlink sanitized output).
+  - TAR limits/symlink tests and nested limits-json unknown/zero-value tests.
+  - CI runs offline static/runtime checks, SSOT validation, and manifest verification.
+- Gates/checks:
+evidence: spec/11_QUALITY_GATES.md :: G-SEC-NO-PLAINTEXT-LEAKS
+evidence: spec/11_QUALITY_GATES.md :: G-REL-ARCHIVE-LIMITS
+evidence: spec/11_QUALITY_GATES.md :: G-REL-ATOMIC-COMMIT
+evidence: checks/CHECKS_INDEX.md :: CHK-LOG-SCHEMA
+evidence: checks/CHECKS_INDEX.md :: CHK-MANIFEST-VERIFY
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: YES (run/verify/evidence/resume contracts)
+- unsafe/high-risk: YES (path safety, evidence integrity, archive limits)
+- conservative baseline available: YES (fail closed on ambiguity/failure)
+- safe to decide: YES (testable with deterministic integration suites)
+
+### Conservative baseline
+- YES (structured logs + strict path safety + fail-closed resume/evidence behavior)
+
+### Fail-closed baseline behavior
+- On unsafe output/evidence path state, unreadable prior proof evidence, or raw-copy persist failure with opt-in enabled: abort with `EXIT_FATAL`.
+- On unsafe verified output path at `verify` time: count as verification failure and return `EXIT_QUARANTINED` if any failures exist.
+
+---
+
+## D-0021 - Runtime hardening pass: verify completeness checks, usage redaction, and workdir disk bounds
+
+### Decision statement
+- Extend `limits.v1` with optional disk bounds:
+  - `disk.max_workdir_bytes` (u64, must be `>= 1` when present).
+  - default when omitted: `1073741824` (1 GiB).
+- `veil run` MUST enforce workdir usage bound fail-closed:
+  - preflight measure workdir usage; if already above bound, fail run (`EXIT_FATAL`).
+  - before staging sanitized bytes, if projected usage exceeds bound, quarantine artifact with `LIMIT_EXCEEDED`.
+- `veil verify` MUST enforce output/evidence consistency fail-closed:
+  - refuse unsafe `pack_manifest.json` and `evidence/artifacts.ndjson` paths (symlink/reparse/non-file).
+  - enforce `sanitized/` contains only files represented as VERIFIED in `artifacts.ndjson`.
+- Resume safety tightening:
+  - if `pack_manifest.json` already exists, output is treated as completed and resume is refused.
+- Usage/log redaction tightening:
+  - unknown flags and unexpected positional arguments are reported as redacted usage errors (no user-provided plaintext echoed).
+- Atomic persistence tightening:
+  - atomic writers sync temporary file contents before rename and sync parent directory after rename.
+  - sanitized commit path adds a cross-filesystem-safe fallback (`rename` failure -> atomic write in destination directory).
+
+### Rationale
+- Addresses remaining fail-closed and security gaps in verification completeness, resume semantics, and usage-message leakage.
+- Adds explicit temp/workdir disk bounding to satisfy resource-bound requirements in critical flows.
+- Improves durability guarantees for evidence/manifests and avoids all-artifact quarantine on cross-filesystem workdir/output layouts.
+
+### Alternatives considered
+- Keep verify as evidence-only enumeration without filesystem cross-check:
+  - rejected: allows untracked sanitized outputs to evade verification.
+- Keep argument-specific usage messages:
+  - rejected: can leak operator-provided sensitive values into stderr logs.
+- Abort immediately on cross-filesystem rename:
+  - rejected: causes unnecessary INTERNAL_ERROR quarantines despite safe atomic write fallback availability.
+
+### Implications (what it affects)
+- CLI/public limits schema now includes a disk-bound knob (`limits.v1` extension).
+- Verification is stricter and will fail/quarantine packs with unexpected sanitized files or unsafe evidence path topology.
+- Resume behavior is stricter for already-finalized outputs.
+
+### Affected files
+- spec/02_ARCHITECTURE.md
+- spec/04_INTERFACES_AND_CONTRACTS.md
+- spec/11_QUALITY_GATES.md
+- spec/07_RELIABILITY_AND_OPERATIONS.md
+- crates/veil-cli/src/main.rs
+- crates/veil-cli/tests/cli_smoke.rs
+- crates/veil-cli/tests/contract_consistency.rs
+- crates/veil-cli/tests/limits_json.rs
+- crates/veil-cli/tests/phase2_gates.rs
+- crates/veil-cli/tests/phase3_gates.rs
+
+### Verification impact
+- Must exist:
+  - limits-json tests for `disk.max_workdir_bytes` validation and fail-closed enforcement.
+  - verify tests for unexpected sanitized files and unsafe evidence/manifest paths.
+  - resume test refusing marker+ledger when `pack_manifest.json` already exists.
+  - usage redaction test for unexpected arguments.
+- Gates/checks:
+evidence: spec/11_QUALITY_GATES.md :: G-REL-ARCHIVE-LIMITS
+evidence: spec/11_QUALITY_GATES.md :: G-COMP-CONTRACT-CONSISTENCY
+evidence: spec/11_QUALITY_GATES.md :: G-SEC-NO-PLAINTEXT-LEAKS
+evidence: spec/11_QUALITY_GATES.md :: G-REL-ATOMIC-COMMIT
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: YES (verify/run/output emission/resume)
+- unsafe/high-risk: YES (verification bypass, path safety, resource exhaustion, logging leaks)
+- conservative baseline available: YES (strict refusal/quarantine and redacted diagnostics)
+- safe to decide: YES (fully testable with local integration suites)
+
+### Conservative baseline
+- YES (fail closed on unsafe paths, inconsistent outputs, and workdir bound violations)
+
+### Fail-closed baseline behavior
+- Unsafe verify-evidence paths or malformed verified-output topology: verification fails closed.
+- Workdir bound violations: per-artifact quarantine (`LIMIT_EXCEEDED`) or run abort if preflight state is already unsafe.

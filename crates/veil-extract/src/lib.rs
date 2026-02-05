@@ -380,9 +380,7 @@ fn canonicalize_json_value(v: &mut serde_json::Value) {
 
             let mut out = serde_json::Map::new();
             for k in keys {
-                let mut vv = old
-                    .remove(&k)
-                    .expect("key was present when enumerated");
+                let mut vv = old.remove(&k).expect("key was present when enumerated");
                 canonicalize_json_value(&mut vv);
                 out.insert(k, vv);
             }
@@ -496,6 +494,38 @@ fn check_archive_totals(
     }
 
     Ok(())
+}
+
+fn read_to_end_bounded<R: Read>(
+    reader: &mut R,
+    max_bytes: u64,
+) -> Result<Vec<u8>, QuarantineReasonCode> {
+    if max_bytes == 0 {
+        return Err(QuarantineReasonCode::LimitExceeded);
+    }
+
+    let mut out = Vec::<u8>::new();
+    let mut total = 0_u64;
+    let mut buf = [0_u8; 64 * 1024];
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|_| QuarantineReasonCode::ParseError)?;
+        if n == 0 {
+            break;
+        }
+
+        let n_u64 = u64::try_from(n).map_err(|_| QuarantineReasonCode::LimitExceeded)?;
+        total = total
+            .checked_add(n_u64)
+            .ok_or(QuarantineReasonCode::LimitExceeded)?;
+        if total > max_bytes {
+            return Err(QuarantineReasonCode::LimitExceeded);
+        }
+
+        out.extend_from_slice(&buf[..n]);
+    }
+    Ok(out)
 }
 
 fn archive_coverage_full() -> CoverageMapV1 {
@@ -830,7 +860,10 @@ fn parse_ndjson_values(bytes: &[u8]) -> Option<Vec<serde_json::Value>> {
     Some(values)
 }
 
-fn classify_attachment_archive(mimetype: &str, disposition_filename: Option<&str>) -> Option<NestedArchiveKind> {
+fn classify_attachment_archive(
+    mimetype: &str,
+    disposition_filename: Option<&str>,
+) -> Option<NestedArchiveKind> {
     let mimetype = mimetype.to_ascii_lowercase();
     if mimetype == "application/zip" {
         return Some(NestedArchiveKind::Zip);
@@ -839,9 +872,7 @@ fn classify_attachment_archive(mimetype: &str, disposition_filename: Option<&str
         return Some(NestedArchiveKind::Tar);
     }
 
-    let Some(name) = disposition_filename else {
-        return None;
-    };
+    let name = disposition_filename?;
     let lower = name.to_ascii_lowercase();
     if lower.ends_with(".zip") {
         Some(NestedArchiveKind::Zip)
@@ -880,7 +911,11 @@ fn make_email_header_record(
     serde_json::Value::Object(map)
 }
 
-fn make_email_body_record(message_index: Option<u32>, body_index: u32, text: &str) -> serde_json::Value {
+fn make_email_body_record(
+    message_index: Option<u32>,
+    body_index: u32,
+    text: &str,
+) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     if let Some(message_index) = message_index {
         map.insert(
@@ -949,7 +984,12 @@ fn extract_eml_entries(
 
     for (idx, h) in mail.headers.iter().enumerate() {
         let idx = u32::try_from(idx).unwrap_or(u32::MAX);
-        out.push(make_email_header_record(None, idx, &h.get_key(), &h.get_value()));
+        out.push(make_email_header_record(
+            None,
+            idx,
+            &h.get_key(),
+            &h.get_value(),
+        ));
     }
 
     let mut has_attachments = false;
@@ -1052,8 +1092,10 @@ fn collect_mail_leaf_parts(
     let mimetype = mail.ctype.mimetype.to_ascii_lowercase();
     let is_text = mimetype.starts_with("text/");
 
-    let is_attachment = matches!(disposition.disposition, mailparse::DispositionType::Attachment)
-        || filename.is_some()
+    let is_attachment = matches!(
+        disposition.disposition,
+        mailparse::DispositionType::Attachment
+    ) || filename.is_some()
         || !is_text;
 
     if is_attachment {
@@ -1063,33 +1105,37 @@ fn collect_mail_leaf_parts(
         *attachment_index = attachment_index.saturating_add(1);
 
         let locator_hash = match message_index {
-            Some(m) => synth_locator_hash(&[
-                "mbox",
-                &m.to_string(),
-                "attach",
-                &idx.to_string(),
-            ]),
+            Some(m) => synth_locator_hash(&["mbox", &m.to_string(), "attach", &idx.to_string()]),
             None => synth_locator_hash(&["eml", "attach", &idx.to_string()]),
         };
 
-        let filename_hash =
-            filename.map(|f| veil_domain::hash_source_locator_hash(f).to_string());
+        let filename_hash = filename.map(|f| veil_domain::hash_source_locator_hash(f).to_string());
 
-    let raw = mail
-        .get_body_raw()
-        .map_err(|_| QuarantineReasonCode::ParseError)?;
+        let raw = mail
+            .get_body_raw()
+            .map_err(|_| QuarantineReasonCode::ParseError)?;
+        let raw_len = u64::try_from(raw.len()).unwrap_or(u64::MAX);
+        if raw_len > limits.max_bytes_per_artifact {
+            return Err(QuarantineReasonCode::LimitExceeded);
+        }
 
-    if let Some(kind) = classify_attachment_archive(&mimetype, filename) {
+        if let Some(kind) = classify_attachment_archive(&mimetype, filename) {
             let nested = match kind {
-                NestedArchiveKind::Zip => extract_zip_entries(limits, &raw, 1, Some(&locator_hash))?,
-                NestedArchiveKind::Tar => extract_tar_entries(limits, &raw, 1, Some(&locator_hash))?,
+                NestedArchiveKind::Zip => {
+                    extract_zip_entries(limits, &raw, 1, Some(&locator_hash))?
+                }
+                NestedArchiveKind::Tar => {
+                    extract_tar_entries(limits, &raw, 1, Some(&locator_hash))?
+                }
             };
             for mut v in nested {
                 if let serde_json::Value::Object(ref mut map) = v {
                     if let Some(message_index) = message_index {
                         map.insert(
                             "message_index".to_string(),
-                            serde_json::Value::Number(serde_json::Number::from(message_index as u64)),
+                            serde_json::Value::Number(serde_json::Number::from(
+                                message_index as u64,
+                            )),
                         );
                     }
                     map.insert(
@@ -1131,7 +1177,9 @@ fn collect_mail_leaf_parts(
 
     let idx = *body_index;
     *body_index = body_index.saturating_add(1);
-    let text = mail.get_body().map_err(|_| QuarantineReasonCode::ParseError)?;
+    let text = mail
+        .get_body()
+        .map_err(|_| QuarantineReasonCode::ParseError)?;
     out.push(make_email_body_record(message_index, idx, &text));
     Ok(())
 }
@@ -1188,7 +1236,9 @@ fn read_zip_index<'a>(
         Err(zip::result::ZipError::UnsupportedArchive(
             zip::result::ZipError::PASSWORD_REQUIRED,
         )) => Err(QuarantineReasonCode::Encrypted),
-        Err(zip::result::ZipError::UnsupportedArchive(_)) => Err(QuarantineReasonCode::UnsupportedFormat),
+        Err(zip::result::ZipError::UnsupportedArchive(_)) => {
+            Err(QuarantineReasonCode::UnsupportedFormat)
+        }
         Err(zip::result::ZipError::InvalidArchive(_)) => Err(QuarantineReasonCode::ParseError),
         Err(zip::result::ZipError::Io(_)) => Err(QuarantineReasonCode::ParseError),
         Err(zip::result::ZipError::FileNotFound) => Err(QuarantineReasonCode::ParseError),
@@ -1230,7 +1280,7 @@ fn extract_ooxml_entries(
     }
 
     let mut total_compressed_bytes = 0_u64;
-    let mut total_expanded_bytes = 0_u64;
+    let mut total_expanded_bytes_observed = 0_u64;
 
     let mut has_embedded_binaries = false;
     let mut metas = Vec::<PartMeta>::with_capacity(entry_count);
@@ -1257,10 +1307,6 @@ fn extract_ooxml_entries(
         total_compressed_bytes = total_compressed_bytes
             .checked_add(file.compressed_size())
             .ok_or(QuarantineReasonCode::LimitExceeded)?;
-        total_expanded_bytes = total_expanded_bytes
-            .checked_add(file.size())
-            .ok_or(QuarantineReasonCode::LimitExceeded)?;
-
         let part_path_hash = veil_domain::hash_source_locator_hash(&normalized_path).to_string();
         metas.push(PartMeta {
             index: idx,
@@ -1271,12 +1317,7 @@ fn extract_ooxml_entries(
         });
     }
 
-    check_archive_totals(
-        limits,
-        entry_count,
-        total_compressed_bytes,
-        total_expanded_bytes,
-    )?;
+    check_archive_totals(limits, entry_count, total_compressed_bytes, 0)?;
 
     if has_embedded_binaries {
         return Ok((Vec::new(), true));
@@ -1291,9 +1332,13 @@ fn extract_ooxml_entries(
         }
 
         let mut file = read_zip_index(&mut archive, meta.index)?;
-        let mut part_bytes = Vec::<u8>::new();
-        file.read_to_end(&mut part_bytes)
-            .map_err(|_| QuarantineReasonCode::ParseError)?;
+        let part_bytes = read_to_end_bounded(&mut file, limits.max_bytes_per_artifact)?;
+        total_expanded_bytes_observed = total_expanded_bytes_observed
+            .checked_add(u64::try_from(part_bytes.len()).unwrap_or(u64::MAX))
+            .ok_or(QuarantineReasonCode::LimitExceeded)?;
+        if total_expanded_bytes_observed > limits.max_expanded_bytes_per_archive {
+            return Err(QuarantineReasonCode::LimitExceeded);
+        }
 
         let text = extract_xml_text(&part_bytes)?;
         if text.trim().is_empty() {
@@ -1303,6 +1348,12 @@ fn extract_ooxml_entries(
         values.push(make_ooxml_record(&meta.part_path_hash, &text));
     }
 
+    check_archive_totals(
+        limits,
+        entry_count,
+        total_compressed_bytes,
+        total_expanded_bytes_observed,
+    )?;
     Ok((values, false))
 }
 
@@ -1496,8 +1547,7 @@ fn extract_zip_entries(
     }
 
     let cursor = Cursor::new(bytes);
-    let mut archive =
-        zip::ZipArchive::new(cursor).map_err(|_| QuarantineReasonCode::ParseError)?;
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|_| QuarantineReasonCode::ParseError)?;
 
     let entry_count = archive.len();
     if u32::try_from(entry_count).unwrap_or(u32::MAX) > limits.max_entries_per_archive {
@@ -1505,7 +1555,7 @@ fn extract_zip_entries(
     }
 
     let mut total_compressed_bytes = 0_u64;
-    let mut total_expanded_bytes = 0_u64;
+    let mut total_expanded_bytes_observed = 0_u64;
 
     #[derive(Debug, Clone)]
     struct ZipMeta {
@@ -1536,10 +1586,6 @@ fn extract_zip_entries(
         total_compressed_bytes = total_compressed_bytes
             .checked_add(file.compressed_size())
             .ok_or(QuarantineReasonCode::LimitExceeded)?;
-        total_expanded_bytes = total_expanded_bytes
-            .checked_add(file.size())
-            .ok_or(QuarantineReasonCode::LimitExceeded)?;
-
         let nested_kind = classify_nested_archive_path(&normalized_path);
         metas.push(ZipMeta {
             index: i,
@@ -1550,12 +1596,7 @@ fn extract_zip_entries(
         });
     }
 
-    check_archive_totals(
-        limits,
-        entry_count,
-        total_compressed_bytes,
-        total_expanded_bytes,
-    )?;
+    check_archive_totals(limits, entry_count, total_compressed_bytes, 0)?;
 
     metas.sort_by(|a, b| a.normalized_path.cmp(&b.normalized_path));
 
@@ -1575,25 +1616,39 @@ fn extract_zip_entries(
                 return Err(QuarantineReasonCode::LimitExceeded);
             }
 
-            let mut nested_bytes = Vec::<u8>::new();
-            file.read_to_end(&mut nested_bytes)
-                .map_err(|_| QuarantineReasonCode::ParseError)?;
+            let nested_bytes = read_to_end_bounded(&mut file, limits.max_bytes_per_artifact)?;
+            total_expanded_bytes_observed = total_expanded_bytes_observed
+                .checked_add(u64::try_from(nested_bytes.len()).unwrap_or(u64::MAX))
+                .ok_or(QuarantineReasonCode::LimitExceeded)?;
+            if total_expanded_bytes_observed > limits.max_expanded_bytes_per_archive {
+                return Err(QuarantineReasonCode::LimitExceeded);
+            }
 
             let nested_entries = match kind {
-                NestedArchiveKind::Zip => {
-                    extract_zip_entries(limits, &nested_bytes, next_depth, Some(&meta.entry_path_hash))?
-                }
-                NestedArchiveKind::Tar => {
-                    extract_tar_entries(limits, &nested_bytes, next_depth, Some(&meta.entry_path_hash))?
-                }
+                NestedArchiveKind::Zip => extract_zip_entries(
+                    limits,
+                    &nested_bytes,
+                    next_depth,
+                    Some(&meta.entry_path_hash),
+                )?,
+                NestedArchiveKind::Tar => extract_tar_entries(
+                    limits,
+                    &nested_bytes,
+                    next_depth,
+                    Some(&meta.entry_path_hash),
+                )?,
             };
             out.extend(nested_entries);
             continue;
         }
 
-        let mut entry_bytes = Vec::<u8>::new();
-        file.read_to_end(&mut entry_bytes)
-            .map_err(|_| QuarantineReasonCode::ParseError)?;
+        let entry_bytes = read_to_end_bounded(&mut file, limits.max_bytes_per_artifact)?;
+        total_expanded_bytes_observed = total_expanded_bytes_observed
+            .checked_add(u64::try_from(entry_bytes.len()).unwrap_or(u64::MAX))
+            .ok_or(QuarantineReasonCode::LimitExceeded)?;
+        if total_expanded_bytes_observed > limits.max_expanded_bytes_per_archive {
+            return Err(QuarantineReasonCode::LimitExceeded);
+        }
 
         let text = std::str::from_utf8(&entry_bytes)
             .map_err(|_| QuarantineReasonCode::UnsupportedFormat)?;
@@ -1605,6 +1660,12 @@ fn extract_zip_entries(
         ));
     }
 
+    check_archive_totals(
+        limits,
+        entry_count,
+        total_compressed_bytes,
+        total_expanded_bytes_observed,
+    )?;
     Ok(out)
 }
 
@@ -1646,25 +1707,10 @@ fn extract_tar_entries(
             return Err(QuarantineReasonCode::UnsafePath);
         }
 
-        let raw_path = entry
-            .path()
-            .map_err(|_| QuarantineReasonCode::ParseError)?;
-        let raw_path = raw_path
-            .to_str()
-            .ok_or(QuarantineReasonCode::UnsafePath)?;
+        let raw_path = entry.path().map_err(|_| QuarantineReasonCode::ParseError)?;
+        let raw_path = raw_path.to_str().ok_or(QuarantineReasonCode::UnsafePath)?;
         let normalized_path =
             normalize_archive_entry_path(raw_path).ok_or(QuarantineReasonCode::UnsafePath)?;
-
-        let header_size = entry
-            .header()
-            .size()
-            .map_err(|_| QuarantineReasonCode::ParseError)?;
-        total_expanded_bytes = total_expanded_bytes
-            .checked_add(header_size)
-            .ok_or(QuarantineReasonCode::LimitExceeded)?;
-        if total_expanded_bytes > limits.max_expanded_bytes_per_archive {
-            return Err(QuarantineReasonCode::LimitExceeded);
-        }
 
         if entry.header().entry_type().is_dir() {
             continue;
@@ -1676,10 +1722,13 @@ fn extract_tar_entries(
         let entry_path_hash = veil_domain::hash_source_locator_hash(&normalized_path).to_string();
         let nested_kind = classify_nested_archive_path(&normalized_path);
 
-        let mut entry_bytes = Vec::<u8>::new();
-        entry
-            .read_to_end(&mut entry_bytes)
-            .map_err(|_| QuarantineReasonCode::ParseError)?;
+        let entry_bytes = read_to_end_bounded(&mut entry, limits.max_bytes_per_artifact)?;
+        total_expanded_bytes = total_expanded_bytes
+            .checked_add(u64::try_from(entry_bytes.len()).unwrap_or(u64::MAX))
+            .ok_or(QuarantineReasonCode::LimitExceeded)?;
+        if total_expanded_bytes > limits.max_expanded_bytes_per_archive {
+            return Err(QuarantineReasonCode::LimitExceeded);
+        }
 
         if let Some(kind) = nested_kind {
             let next_depth = depth
@@ -1712,7 +1761,12 @@ fn extract_tar_entries(
     }
 
     // TAR is uncompressed; compressed_bytes == expanded_bytes for ratio purposes.
-    check_archive_totals(limits, total_entries, total_expanded_bytes, total_expanded_bytes)?;
+    check_archive_totals(
+        limits,
+        total_entries,
+        total_expanded_bytes,
+        total_expanded_bytes,
+    )?;
 
     extracted.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(extracted.into_iter().map(|(_, v)| v).collect())

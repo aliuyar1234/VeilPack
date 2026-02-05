@@ -62,3 +62,36 @@
 - Added perf harness + baseline capture (`checks/perf_harness.py`, `checks/perf_baseline.json`).
 - Hardened key handling with in-memory zeroization (`zeroize` in `crates/veil-cli`).
 - Updated runbook (`spec/12`) and checks index (`checks/CHECKS_INDEX.md`) with Phase 5 harness commands and SSOT validation automation (`checks/ssot_validate.py`).
+
+### Security hardening follow-up (D-0018)
+- Extended `limits.v1` with `artifact.max_bytes_per_artifact` and enforced bounded artifact reads in CLI and extractors.
+- Added processing-time artifact identity revalidation (discovered hash/size vs processed bytes) with fail-closed quarantine on mismatch.
+- Hardened output/workdir path safety checks to reject symlink/reparse traversal and unsafe write paths.
+- Strengthened offline runtime enforcement test to monitor live process socket activity during execution under denied-proxy posture.
+- Widened static offline scan scope to all Rust sources under `crates/**/*.rs` (including `build.rs`).
+- Pinned GitHub Actions workflow references to immutable SHAs and set explicit least-privilege workflow permissions.
+- Updated SSOT contracts/gates/specs (`spec/02`, `spec/04`, `spec/11`) and decision log (`DECISIONS.md` D-0018).
+
+### Security audit session
+- Recorded security audit session evidence updates (no product behavior changes).
+- Logged codebase security audit findings for crates/checks (report-only; no product behavior changes).
+
+### Implementation architecture audit (robustness/usability review)
+- Recorded audit session updates and integrity check evidence (no product behavior changes).
+
+### Remediation hardening pass (D-0020)
+- Implemented structured JSON stderr logging (`level`, `event`, `run_id`, `policy_id`) for run/verify error and lifecycle events.
+- Hardened resume metadata binding by storing/validating proof and tokenization meta keys in ledger and failing closed on invalid existing proof-token evidence.
+- Tightened filesystem safety: input enumeration rejects symlink/reparse entries; verify rejects unsafe sanitized path types; evidence/atomic writers validate unsafe path states before persist.
+- Enforced fail-closed behavior when quarantine raw-copy persistence fails under `--quarantine-copy=true`.
+- Hardened ZIP/OOXML/TAR aggregate expanded-byte checks to use observed bytes read.
+- Expanded tests for log schema, TAR limits/symlink safety, verify symlink output hardening, limits-json nested/zero validation, and resume invalid evidence behavior.
+- Expanded CI gates with offline static/runtime enforcement, SSOT validation, and manifest verification.
+
+### Runtime hardening pass (D-0021)
+- Extended `limits.v1` with `disk.max_workdir_bytes` (default 1 GiB) and enforced fail-closed workdir disk bounds during `veil run`.
+- Hardened `veil verify` to reject unsafe evidence/manifest paths and fail closed when `sanitized/` contains untracked files not represented as VERIFIED in `artifacts.ndjson`.
+- Tightened resume safety: refuse resume when a completed `pack_manifest.json` already exists.
+- Redacted usage parsing errors to avoid echoing unknown/unexpected argument values to stderr logs.
+- Hardened atomic persistence with file+directory fsync and added a safe fallback path for cross-filesystem staging rename failures.
+- Expanded tests for workdir bound enforcement, verify completeness/path safety, resume-finalized refusal, usage redaction, and contract assertions for tokenization + `ledger_schema_version`.

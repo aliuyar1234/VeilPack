@@ -112,11 +112,11 @@ fn quarantine_raw_copy_is_opt_in_and_contained() {
     let artifact_id = veil_domain::hash_artifact_id(raw_bytes);
     let source_locator_hash = veil_domain::hash_source_locator_hash("a.bin");
     let sort_key = veil_domain::ArtifactSortKey::new(artifact_id, source_locator_hash);
-    let expected_name = format!("{}__{}.bin", sort_key.source_locator_hash, sort_key.artifact_id);
-    let copied = output
-        .join("quarantine")
-        .join("raw")
-        .join(expected_name);
+    let expected_name = format!(
+        "{}__{}.bin",
+        sort_key.source_locator_hash, sort_key.artifact_id
+    );
+    let copied = output.join("quarantine").join("raw").join(expected_name);
     assert!(copied.is_file());
     assert_eq!(std::fs::read(copied).expect("read copied file"), raw_bytes);
 }
@@ -149,8 +149,11 @@ fn verify_refuses_unsupported_pack_schema_versions() {
     )
     .expect("parse pack_manifest");
     pack_manifest["pack_schema_version"] = serde_json::Value::String("pack.v0".to_string());
-    std::fs::write(&pack_manifest_path, serde_json::to_vec(&pack_manifest).expect("serialize"))
-        .expect("write pack_manifest");
+    std::fs::write(
+        &pack_manifest_path,
+        serde_json::to_vec(&pack_manifest).expect("serialize"),
+    )
+    .expect("write pack_manifest");
 
     let out = veil_cmd()
         .arg("verify")
@@ -162,6 +165,49 @@ fn verify_refuses_unsupported_pack_schema_versions() {
         .expect("run veil verify");
 
     assert_eq!(out.status.code(), Some(1));
+}
+
+#[cfg(unix)]
+#[test]
+fn verify_refuses_when_pack_manifest_path_is_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let input = TestDir::new("pack_manifest_symlink_input");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy = TestDir::new("pack_manifest_symlink_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("pack_manifest_symlink_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+    assert_eq!(out.status.code(), Some(0));
+
+    let pack_manifest_path = output.join("pack_manifest.json");
+    let external = TestDir::new("pack_manifest_symlink_external");
+    let external_file = external.join("outside.json");
+    std::fs::write(&external_file, "{}").expect("write external");
+    std::fs::remove_file(&pack_manifest_path).expect("remove pack_manifest");
+    symlink(&external_file, &pack_manifest_path).expect("symlink pack_manifest");
+
+    let verify = veil_cmd()
+        .arg("verify")
+        .arg("--pack")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil verify");
+    assert_eq!(verify.status.code(), Some(1));
 }
 
 #[test]
@@ -192,8 +238,11 @@ fn verify_refuses_unsupported_ledger_schema_versions() {
     )
     .expect("parse pack_manifest");
     pack_manifest["ledger_schema_version"] = serde_json::Value::String("ledger.v0".to_string());
-    std::fs::write(&pack_manifest_path, serde_json::to_vec(&pack_manifest).expect("serialize"))
-        .expect("write pack_manifest");
+    std::fs::write(
+        &pack_manifest_path,
+        serde_json::to_vec(&pack_manifest).expect("serialize"),
+    )
+    .expect("write pack_manifest");
 
     let out = veil_cmd()
         .arg("verify")

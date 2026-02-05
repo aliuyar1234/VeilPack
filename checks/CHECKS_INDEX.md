@@ -196,9 +196,9 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 - Type: automated (implemented in repo)
 - How to run:
   - Static scan: `python checks/offline_enforcement.py`
-  - Runtime smoke (should complete quickly): `cargo test -p veil-cli --test offline_enforcement`
+  - Runtime offline monitor: `cargo test -p veil-cli --test offline_enforcement`
 - Pass/fail:
-  - PASS if no network calls are attempted.
+  - PASS if static scan has no hits and runtime test observes no socket activity from `veil run`.
 - Evidence:
   - evidence: PROGRESS.md :: CHK-OFFLINE-ENFORCEMENT
 
@@ -213,6 +213,18 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
   - PASS if canaries are absent from all outputs.
 - Evidence:
   - evidence: PROGRESS.md :: CHK-NO-PLAINTEXT-LEAKS
+
+---
+
+## CHK-LOG-SCHEMA
+- Purpose: ensure stderr logs follow Observability Log Schema v1.
+- Type: automated (implemented in repo)
+- How to run:
+  - `cargo test -p veil-cli --test phase1_gates logs_use_structured_json_schema_v1 -- --exact`
+- Pass/fail:
+  - PASS if every emitted stderr log line is JSON and includes `level`, `event`, `run_id`, `policy_id`.
+- Evidence:
+  - evidence: PROGRESS.md :: CHK-LOG-SCHEMA
 
 ---
 

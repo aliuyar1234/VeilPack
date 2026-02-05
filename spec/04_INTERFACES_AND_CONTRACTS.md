@@ -19,6 +19,29 @@ Veil is a CLI-first batch tool. The CLI is a **public contract** and MUST be ver
   - `--quarantine-copy false|true` (default: false; see D-0005)
   - `--limits-json <PATH>`: optional JSON file overriding resource and archive limits
 
+#### `--limits-json` schema v1
+If `--limits-json` is provided, the file MUST be UTF-8 JSON and MUST conform to D-0012.
+
+Minimal shape (conceptual):
+```json
+{
+  "schema_version": "limits.v1",
+  "archive": {
+    "max_nested_archive_depth": 3,
+    "max_entries_per_archive": 100000,
+    "max_expansion_ratio": 25,
+    "max_expanded_bytes_per_archive": 53687091200
+  }
+}
+```
+
+Rules:
+- `schema_version` MUST equal `limits.v1`
+- Unknown fields MUST be rejected (fail closed)
+
+Decision:
+evidence: DECISIONS.md :: ## D-0012
+
 2) `veil verify`
 - Purpose: verify a Veil Pack output using a policy bundle.
 - Required flags:

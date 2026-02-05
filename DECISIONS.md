@@ -571,3 +571,103 @@ evidence: checks/CHECKS_INDEX.md :: CHK-MANIFEST-VERIFY
 
 ### Fail-closed baseline behavior
 - If the manifest cannot be regenerated or does not verify, the session MUST be treated as BLOCKED for acceptance.
+
+---
+
+## D-0011 — Canonical length encoding for policy bundle hashing (extends D-0001)
+
+### Decision statement
+For D-0001 canonical policy bundle hashing:
+- `path_len` is encoded as a 4-byte unsigned little-endian integer (`u32`, bytes of UTF-8 path).
+- `file_len` is encoded as an 8-byte unsigned little-endian integer (`u64`, bytes of file content).
+- `path_bytes` are the normalized relative path bytes:
+  - UTF-8
+  - forward-slash (`/`) separators
+  - no leading `./`
+
+### Rationale
+- Removes ambiguity in D-0001 so independent implementations produce identical `policy_id`.
+- Keeps the canonical byte stream compact and unambiguous.
+
+### Alternatives considered
+- Text encoding lengths (ASCII decimal):
+  - rejected: slower and ambiguous without separators.
+- Big-endian:
+  - rejected: no benefit; little-endian is conventional in Rust and stable.
+
+### Implications (what it affects)
+- Any policy bundle hashing implementation must follow this encoding exactly.
+
+### Affected files
+- crates/veil-policy/src/bundle_id.rs
+- DECISIONS.md (this decision clarifies D-0001)
+
+### Verification impact
+- Must exist:
+  - unit/integration tests for policy bundle hashing determinism
+- Gates/checks:
+evidence: spec/11_QUALITY_GATES.md :: G-SEC-POLICY-ID-IMMUTABLE
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: YES (policy identity is bound to all outputs)
+- unsafe/high-risk: YES (drift undermines auditability and resume/verify safety)
+- conservative baseline available: YES (strict, explicit encoding)
+- safe to decide: YES (fully testable)
+
+### Conservative baseline
+- YES (explicit binary length encoding; strict UTF-8 paths)
+
+### Fail-closed baseline behavior
+- If any path cannot be normalized to UTF-8, policy hashing MUST fail and the run MUST refuse to start.
+
+---
+
+## D-0012 — `--limits-json` schema v1 (archive limits overrides)
+
+### Decision statement
+The `--limits-json` file is a UTF-8 JSON object with:
+- required: `schema_version` (string) which MUST equal `limits.v1`
+- optional: `archive` object with optional numeric overrides:
+  - `max_nested_archive_depth` (u32)
+  - `max_entries_per_archive` (u32)
+  - `max_expansion_ratio` (u32, MUST be >= 1)
+  - `max_expanded_bytes_per_archive` (u64, MUST be >= 1)
+
+Unknown fields at any level MUST be rejected (fail closed).
+
+### Rationale
+- Provides a strict, versioned, offline configuration surface for safety limits.
+- Deny-unknown-fields prevents silent misconfiguration in critical flows.
+
+### Alternatives considered
+- Unversioned ad-hoc JSON:
+  - rejected: invites drift and ambiguity.
+- Allow unknown fields:
+  - rejected: makes typos silently unsafe.
+
+### Implications (what it affects)
+- `veil run` must refuse to start if the file is not valid UTF-8 JSON, has an unknown schema_version, or contains unknown keys.
+
+### Affected files
+- crates/veil-cli/src/main.rs
+- spec/04_INTERFACES_AND_CONTRACTS.md (CLI contract)
+
+### Verification impact
+- Must exist:
+  - CLI tests for schema_version and unknown fields rejection
+- Gates/checks:
+evidence: spec/11_QUALITY_GATES.md :: G-REL-ARCHIVE-LIMITS
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: YES (resource limits + archive safety)
+- unsafe/high-risk: YES (misconfiguration can weaken bounds)
+- conservative baseline available: YES (strict schema + deny unknown)
+- safe to decide: YES (fully testable)
+
+### Conservative baseline
+- YES (schema_version required; unknown keys rejected)
+
+### Fail-closed baseline behavior
+- If limits parsing or validation fails, the run MUST exit with invalid-arguments semantics (spec/04).

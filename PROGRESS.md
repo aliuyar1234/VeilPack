@@ -9,8 +9,8 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 | T-0001 | PHASE_0_BOOTSTRAP | DONE |
 | T-0002 | PHASE_0_BOOTSTRAP | DONE |
 | T-0003 | PHASE_0_BOOTSTRAP | DONE |
-| T-0004 | PHASE_0_BOOTSTRAP | IN_PROGRESS |
-| T-0005 | PHASE_0_BOOTSTRAP | IN_PROGRESS |
+| T-0004 | PHASE_0_BOOTSTRAP | DONE |
+| T-0005 | PHASE_0_BOOTSTRAP | DONE |
 | T-0006 | PHASE_0_BOOTSTRAP | DONE |
 | T-0101 | PHASE_1_CORE_PIPELINE | TODO |
 | T-0102 | PHASE_1_CORE_PIPELINE | TODO |
@@ -72,18 +72,21 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Commands present (fail-closed stubs): `veil run`, `veil verify`, `veil policy lint` (exit codes per spec/04 for invalid args vs fail-closed stub).
 
 ### T-0004
-- status: IN_PROGRESS
+- status: DONE
 - evidence:
-  - Determinism primitives started in `crates/veil-domain`:
-    - hex-safe `Digest32` + ID newtypes with unit tests.
-    - `ArtifactSortKey` helper for stable ordering.
-  - Remaining to complete: BLAKE3 hashing helpers + tests (artifact_id/policy_id/run_id).
+  - BLAKE3 hashing + determinism primitives implemented:
+    - `crates/veil-domain/src/hashing.rs` (artifact_id/source_locator_hash/output_id, input_corpus_id, run_id)
+    - `crates/veil-policy/src/bundle_id.rs` (policy_id hashing per D-0001 + D-0011)
+  - `cargo test --workspace` PASS
+  - Boundary check remains enforced: `python checks/boundary_fitness.py` PASS
 
 ### T-0005
-- status: IN_PROGRESS
+- status: DONE
 - evidence:
   - CLI config parsing/validation implemented (strict baseline, tokenization/key invariants, quarantine-copy opt-in, output safety).
   - Default archive safety limits encoded: `crates/veil-domain/src/config.rs` (`ArchiveLimits::default`).
+  - `--limits-json` parsing implemented (schema `limits.v1`, deny unknown fields; see D-0012).
+  - Limits-json tests: `cargo test -p veil-cli --test limits_json` PASS
 
 ### T-0006
 - status: DONE

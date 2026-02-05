@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use serde::Deserialize;
+
 const EXIT_OK: u8 = 0;
 const EXIT_FATAL: u8 = 1;
 const EXIT_QUARANTINED: u8 = 2;
@@ -259,6 +261,7 @@ fn validate_run_args(args: &RunArgs) -> Result<(), String> {
 
     if let Some(limits_json) = &args.limits_json {
         ensure_file_exists(limits_json, "limits-json")?;
+        let _limits = load_archive_limits_from_json(limits_json)?;
     }
 
     if let Some(max_workers) = args.max_workers {
@@ -414,6 +417,57 @@ fn ensure_output_safe(output: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LimitsFileV1 {
+    schema_version: String,
+    #[serde(default)]
+    archive: ArchiveLimitsOverride,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArchiveLimitsOverride {
+    max_nested_archive_depth: Option<u32>,
+    max_entries_per_archive: Option<u32>,
+    max_expansion_ratio: Option<u32>,
+    max_expanded_bytes_per_archive: Option<u64>,
+}
+
+fn load_archive_limits_from_json(path: &Path) -> Result<veil_domain::ArchiveLimits, String> {
+    let json = std::fs::read_to_string(path)
+        .map_err(|_| "limits-json could not be read (redacted)".to_string())?;
+
+    let parsed: LimitsFileV1 = serde_json::from_str(&json)
+        .map_err(|_| "limits-json is not valid JSON (redacted)".to_string())?;
+
+    if parsed.schema_version != "limits.v1" {
+        return Err("limits-json schema_version must be 'limits.v1' (v1)".to_string());
+    }
+
+    let mut limits = veil_domain::ArchiveLimits::default();
+    if let Some(v) = parsed.archive.max_nested_archive_depth {
+        limits.max_nested_archive_depth = v;
+    }
+    if let Some(v) = parsed.archive.max_entries_per_archive {
+        limits.max_entries_per_archive = v;
+    }
+    if let Some(v) = parsed.archive.max_expansion_ratio {
+        if v == 0 {
+            return Err("limits-json max_expansion_ratio must be >= 1".to_string());
+        }
+        limits.max_expansion_ratio = v;
+    }
+    if let Some(v) = parsed.archive.max_expanded_bytes_per_archive {
+        if v == 0 {
+            return Err("limits-json max_expanded_bytes_per_archive must be >= 1".to_string());
+        }
+        limits.max_expanded_bytes_per_archive = v;
+    }
+
+    Ok(limits)
 }
 
 fn print_root_help(exe: &str) {

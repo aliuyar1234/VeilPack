@@ -15,6 +15,11 @@ veil-policy = { path = "../veil-policy" }
 veil-transform = { path = "../veil-transform" }
 veil-verify = { path = "../veil-verify" }
 
+[dev-dependencies]
+base64 = "0.22"
+tar = "0.4"
+zip = "0.6"
+
 [[bin]]
 name = "veil"
 path = "src/main.rs"

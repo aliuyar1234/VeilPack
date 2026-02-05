@@ -64,6 +64,7 @@ evidence: PROGRESS.md :: G-SEC-POLICY-ID-IMMUTABLE
 - Verify:
   - For each supported format, test that CoverageMap v1 has no UNKNOWN surfaces.
   - For unsupported/partial cases, test that UNKNOWN coverage leads to quarantine.
+  - Phase 4 coverage enforcement suite: `cargo test -p veil-cli --test phase4_gates`
 - Pass/fail:
   - PASS if UNKNOWN never results in VERIFIED.
 - Evidence:
@@ -129,6 +130,7 @@ evidence: DECISIONS.md :: ## D-0014
 - Verify:
   - tests that trigger each archive limit and assert quarantine of the archive artifact.
   - tests that attempt path traversal and assert quarantine.
+  - Phase 4 archive limits suite: `cargo test -p veil-cli --test phase4_gates`
 - Pass/fail:
   - PASS if all violations quarantine and no partial emission occurs.
 - Evidence:

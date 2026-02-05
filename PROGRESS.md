@@ -31,9 +31,9 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 | T-0303 | PHASE_3_EVIDENCE_AND_AUDIT | DONE |
 | T-0304 | PHASE_3_EVIDENCE_AND_AUDIT | DONE |
 | T-0305 | PHASE_3_EVIDENCE_AND_AUDIT | DONE |
-| T-0401 | PHASE_4_FORMATS_AND_LIMITS | TODO |
-| T-0402 | PHASE_4_FORMATS_AND_LIMITS | TODO |
-| T-0403 | PHASE_4_FORMATS_AND_LIMITS | TODO |
+| T-0401 | PHASE_4_FORMATS_AND_LIMITS | DONE |
+| T-0402 | PHASE_4_FORMATS_AND_LIMITS | DONE |
+| T-0403 | PHASE_4_FORMATS_AND_LIMITS | DONE |
 | T-0501 | PHASE_5_HARDENING | TODO |
 | T-0502 | PHASE_5_HARDENING | TODO |
 | T-0503 | PHASE_5_HARDENING | TODO |
@@ -267,16 +267,22 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
     - evidence: DECISIONS.md :: ## D-0016 — Proof token emission binding (v1)
 
 ### T-0401
-- status: TODO
+- status: DONE
 - evidence:
+  - Archive extractor (ZIP/TAR) enforces D-0006 limits and quarantines on violations/unsafe paths:
+    - `cargo test -p veil-cli --test phase4_gates` PASS
 
 ### T-0402
-- status: TODO
+- status: DONE
 - evidence:
+  - Email extractors (EML/MBOX) parse headers/body and quarantine on unsupported attachments:
+    - `cargo test -p veil-cli --test phase4_gates` PASS
 
 ### T-0403
-- status: TODO
+- status: DONE
 - evidence:
+  - OOXML bounded extractor (DOCX/PPTX/XLSX) quarantines on unknown embedded objects coverage:
+    - `cargo test -p veil-cli --test phase4_gates` PASS
 
 ### T-0501
 - status: TODO
@@ -323,8 +329,9 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test -p veil-cli --test phase2_gates` PASS (verify refuses on policy_id mismatch; policy_id bound in pack_manifest)
 
 ### G-SEC-COVERAGE-ENFORCED
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase4_gates` PASS (UNKNOWN coverage never results in VERIFIED; OOXML embedded binaries quarantine)
 
 ### G-SEC-VERIFY-RESIDUAL
 - status: DONE
@@ -356,8 +363,9 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test -p veil-cli --test phase1_gates` PASS (double-run snapshot equality; excludes `.veil_work/`)
 
 ### G-REL-ARCHIVE-LIMITS
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase4_gates` PASS (archive limits + unsafe paths quarantine; no partial emission)
 
 ### G-REL-ATOMIC-COMMIT
 - status: DONE
@@ -405,6 +413,8 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Verify (CHK-MANIFEST-VERIFY): PASS
   - Regenerate: `python checks/generate_manifest.py` (post doc alignment)
   - Verify (CHK-MANIFEST-VERIFY): PASS
+  - Regenerate: `python checks/generate_manifest.py` (post PHASE_4 changes)
+  - Verify (CHK-MANIFEST-VERIFY): PASS
 
 ### CHK-FORBIDDEN-TERMS
 - status: DONE
@@ -430,6 +440,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `python -c` (see `checks/CHECKS_INDEX.md` CHK-EVIDENCE-POINTER-FORMAT) PASS
   - Post PHASE_3: PASS
   - Post doc alignment: PASS
+  - Post PHASE_4: PASS
 
 ### CHK-REF-INTEGRITY
 - status: DONE

@@ -45,3 +45,11 @@
 - Added pack compatibility tests and enforcement (`veil verify` refuses unsupported pack/ledger schema versions).
 - Implemented proof token emission (digest-only correlation tokens in `artifacts.ndjson`) with key commitment metadata in `run_manifest.json` (D-0016).
 - Added quarantine raw-copy opt-in tests (`quarantine/raw/` created only when explicitly enabled).
+
+### Formats and limits (PHASE_4 completed)
+- Added container format extractors emitting NDJSON canonical representations:
+  - ZIP/TAR with D-0006 safety limits, nested archive depth enforcement, and unsafe-path quarantine.
+  - EML/MBOX with header/body handling; supported attachments scanned; unsupported attachments quarantine.
+  - DOCX/PPTX/XLSX bounded OOXML extraction; embedded binaries/unknown parts force UNKNOWN coverage and quarantine.
+- Added Phase 4 gate tests (`cargo test -p veil-cli --test phase4_gates`).
+- Logged container canonicalization decision (D-0017) and updated specs/contracts accordingly.

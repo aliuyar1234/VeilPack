@@ -117,6 +117,30 @@ evidence: DECISIONS.md :: ## D-0013
 
 ---
 
+## Supported input formats (v1 baseline)
+Veil classifies artifact types by file extension (lowercased) for v1 baseline.
+
+Supported simple formats:
+- TEXT: `.txt` → sanitized output ext `txt`
+- CSV: `.csv` → sanitized output ext `csv`
+- TSV: `.tsv` → sanitized output ext `tsv`
+- JSON: `.json` → sanitized output ext `json`
+- NDJSON: `.ndjson` → sanitized output ext `ndjson`
+
+Supported container formats (canonicalized to NDJSON; sanitized output ext `ndjson`):
+- ZIP: `.zip`
+- TAR: `.tar`
+- Email: `.eml`, `.mbox`
+- Office Open XML: `.docx`, `.pptx`, `.xlsx`
+
+Email attachment baseline (fail-closed):
+- ZIP/TAR attachments are supported (by mimetype or filename).
+- `text/*` attachments are supported (decoded and scanned as attachment text).
+- Any other attachment type MUST quarantine the entire email artifact as `UNSUPPORTED_FORMAT`.
+
+Decision:
+evidence: DECISIONS.md :: ## D-0017 — Container format canonicalization to NDJSON (v1)
+
 ## Policy Bundle Schema v1
 A policy bundle is a directory containing `policy.json` (required). `policy.json` is UTF-8 JSON.
 

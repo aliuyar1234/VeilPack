@@ -902,3 +902,77 @@ evidence: spec/11_QUALITY_GATES.md :: G-REL-DETERMINISM
 
 ### Fail-closed baseline behavior
 - If proof token computation fails, Veil MUST continue without emitting proof tokens rather than emitting plaintext.
+
+---
+
+## D-0017 — Container format canonicalization to NDJSON (v1)
+
+### Decision statement
+- Veil v1 baseline supports these additional container artifact types:
+  - ZIP (`.zip`)
+  - TAR (`.tar`)
+  - Email: EML (`.eml`), MBOX (`.mbox`)
+  - Office Open XML: DOCX (`.docx`), PPTX (`.pptx`), XLSX (`.xlsx`)
+- These container formats MUST be canonicalized to NDJSON for scanning and transformation:
+  - sanitized output ext is `ndjson` per D-0014
+  - each line is a JSON object; ordering is deterministic
+- Internal locators inside container formats MUST NOT be emitted as plaintext in the canonical output.
+  - Archive entry paths → `entry_path_hash` (+ optional `container_path_hash` for nested containers)
+  - Email attachment locators → `attachment_locator_hash` (+ optional `filename_hash`)
+  - OOXML part paths → `part_path_hash`
+- Archive safety limits (D-0006) apply to ZIP/TAR and to nested archives encountered inside other containers.
+- Email attachment baseline (fail-closed):
+  - supported: ZIP/TAR attachments and `text/*` attachments
+  - all other attachment types MUST quarantine the email artifact as `UNSUPPORTED_FORMAT`
+- OOXML embedded objects baseline (fail-closed):
+  - if an OOXML package contains non-XML parts (other than `.rels`), the extractor MUST mark `embedded_objects` coverage as UNKNOWN (D-0002), which results in quarantine under strict baseline.
+
+### Rationale
+- Container formats carry many subdocuments and metadata surfaces; NDJSON provides a uniform canonical stream for detectors/transforms.
+- Hashing internal locators prevents accidental leakage of identifiers embedded in filenames/paths/attachment names.
+- Strict baselines for attachments and embedded objects prevent verified-but-partially-parsed outcomes.
+
+### Alternatives considered
+- Preserve internal filenames/paths in the canonical output:
+  - rejected: high risk of metadata leakage into sanitized outputs.
+- Best-effort decode of arbitrary binary attachments:
+  - rejected: unsafe; encourages false confidence; should quarantine unless explicitly supported.
+- Fully parse OOXML embedded objects:
+  - rejected for v1 baseline: expands attack surface; requires additional parsers and coverage semantics.
+
+### Implications (what it affects)
+- Supported file types and their sanitized output ext mapping become part of the v1 contract surface.
+- Phase 4 gates must include negative-path tests for:
+  - archive limits and unsafe paths
+  - unsupported email attachments
+  - OOXML unknown embedded parts
+
+### Affected files
+- spec/02_ARCHITECTURE.md (supported format handlers)
+- spec/04_INTERFACES_AND_CONTRACTS.md (supported input formats)
+- spec/06_SECURITY_AND_THREAT_MODEL.md (format-specific notes)
+- spec/11_QUALITY_GATES.md (gate verification pointers)
+- crates/veil-extract/src/lib.rs
+- crates/veil-cli/src/main.rs
+
+### Verification impact
+- Must exist:
+  - integration tests covering archive limits and unsafe paths
+  - integration tests covering email attachments (supported vs unsupported)
+  - integration tests covering OOXML embedded binaries → UNKNOWN coverage → quarantine
+- Gates/checks:
+evidence: spec/11_QUALITY_GATES.md :: G-REL-ARCHIVE-LIMITS
+evidence: spec/11_QUALITY_GATES.md :: G-SEC-COVERAGE-ENFORCED
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: YES (format parsing + output contract)
+- unsafe/high-risk: YES (untrusted containers + new leakage surfaces)
+- conservative baseline available: YES (hash internal locators; quarantine unsupported/unknown)
+- safe to decide: YES (testable via deterministic fixtures)
+
+### Conservative baseline
+- YES (fail-closed on unsupported attachments, unsafe archive paths, unknown embedded objects)
+
+### Fail-closed baseline behavior
+- On any container parse error, limit violation, unsafe path, or unsupported substructure, the artifact MUST be QUARANTINED.

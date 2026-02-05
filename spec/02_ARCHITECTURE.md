@@ -97,6 +97,23 @@ evidence: DECISIONS.md :: ## D-0009
 Coverage decision:
 evidence: DECISIONS.md :: D-0002
 
+### Supported format handlers (v1 baseline)
+- Simple formats:
+  - TEXT (`.txt`)
+  - CSV (`.csv`)
+  - TSV (`.tsv`)
+  - JSON (`.json`)
+  - NDJSON (`.ndjson`)
+- Container formats canonicalized to NDJSON (`.ndjson` sanitized outputs per D-0014):
+  - ZIP (`.zip`)
+  - TAR (`.tar`)
+  - EML (`.eml`)
+  - MBOX (`.mbox`)
+  - Office Open XML: DOCX/PPTX/XLSX (`.docx`/`.pptx`/`.xlsx`)
+
+Container canonicalization decision:
+evidence: DECISIONS.md :: ## D-0017 — Container format canonicalization to NDJSON (v1)
+
 ## Determinism and ordering
 - Deterministic ordering and canonical serialization rules are normative.
 evidence: DECISIONS.md :: D-0003

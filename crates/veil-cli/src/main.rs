@@ -70,6 +70,14 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         return exit_usage(exe, &msg, print_run_help);
     }
 
+    let archive_limits = match parsed.limits_json.as_ref() {
+        Some(path) => match load_archive_limits_from_json(path) {
+            Ok(l) => l,
+            Err(msg) => return exit_usage(exe, &msg, print_run_help),
+        },
+        None => veil_domain::ArchiveLimits::default(),
+    };
+
     let policy = match veil_policy::load_policy_bundle(&parsed.policy) {
         Ok(p) => p,
         Err(_) => {
@@ -275,7 +283,7 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         return ExitCode::from(EXIT_FATAL);
     }
 
-    let extractors = veil_extract::ExtractorRegistry::default();
+    let extractors = veil_extract::ExtractorRegistry::new(archive_limits);
     let detector = veil_detect::DetectorEngineV1::default();
     let transformer = veil_transform::TransformerV1::default();
 
@@ -1518,6 +1526,13 @@ fn classify_artifact_type(path: &Path) -> String {
         "tsv" => "TSV",
         "json" => "JSON",
         "ndjson" => "NDJSON",
+        "zip" => "ZIP",
+        "tar" => "TAR",
+        "eml" => "EML",
+        "mbox" => "MBOX",
+        "docx" => "DOCX",
+        "pptx" => "PPTX",
+        "xlsx" => "XLSX",
         _ => "FILE",
     }
     .to_string()
@@ -1776,6 +1791,13 @@ fn ext_for_artifact_type_v1(artifact_type: &str) -> &'static str {
         "TSV" => "tsv",
         "JSON" => "json",
         "NDJSON" => "ndjson",
+        "ZIP" => "ndjson",
+        "TAR" => "ndjson",
+        "EML" => "ndjson",
+        "MBOX" => "ndjson",
+        "DOCX" => "ndjson",
+        "PPTX" => "ndjson",
+        "XLSX" => "ndjson",
         _ => "bin",
     }
 }

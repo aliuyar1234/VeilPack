@@ -7,3 +7,6 @@ edition = "2024"
 veil-domain = { path = "../veil-domain" }
 csv = "1"
 serde_json = "1"
+tar = "0.4"
+zip = "0.6"
+mailparse = "0.14"

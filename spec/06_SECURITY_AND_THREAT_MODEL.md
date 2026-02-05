@@ -32,6 +32,17 @@
   - negative-path tests for parse failure and unknown coverage
   - threat model update for format-specific leakage surfaces
 
+### Format-specific notes (v1 baseline)
+- ZIP/TAR:
+  - enforce D-0006 limits (entry count, expansion ratio, expanded bytes, nested depth)
+  - quarantine on unsafe paths (`..`, absolute), symlinks/links, or encryption/password requirements
+- EML/MBOX:
+  - headers are a metadata surface; must be scanned and transformed
+  - attachments expand attack surface; unsupported attachment types quarantine (fail closed)
+- DOCX/PPTX/XLSX (OOXML):
+  - treat as zipped XML with high parser complexity risk
+  - embedded binaries/unknown parts imply UNKNOWN coverage and must quarantine under strict baseline
+
 
 ---
 

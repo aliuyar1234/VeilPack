@@ -22,10 +22,10 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 | T-0108 | PHASE_1_CORE_PIPELINE | DONE |
 | T-0109 | PHASE_1_CORE_PIPELINE | DONE |
 | T-0110 | PHASE_1_CORE_PIPELINE | DONE |
-| T-0201 | PHASE_2_POLICY_BUNDLE | TODO |
-| T-0202 | PHASE_2_POLICY_BUNDLE | TODO |
-| T-0203 | PHASE_2_POLICY_BUNDLE | TODO |
-| T-0204 | PHASE_2_POLICY_BUNDLE | TODO |
+| T-0201 | PHASE_2_POLICY_BUNDLE | DONE |
+| T-0202 | PHASE_2_POLICY_BUNDLE | DONE |
+| T-0203 | PHASE_2_POLICY_BUNDLE | DONE |
+| T-0204 | PHASE_2_POLICY_BUNDLE | DONE |
 | T-0301 | PHASE_3_EVIDENCE_AND_AUDIT | TODO |
 | T-0302 | PHASE_3_EVIDENCE_AND_AUDIT | TODO |
 | T-0303 | PHASE_3_EVIDENCE_AND_AUDIT | TODO |
@@ -195,20 +195,34 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test --workspace` PASS
 
 ### T-0201
-- status: TODO
+- status: DONE
 - evidence:
+  - Strict policy schema validation + compilation implemented in `crates/veil-policy` (`serde` deny_unknown_fields; bounded regex compilation; reject unsupported features).
+  - `veil policy lint` implemented (validates policy bundle and prints policy_id).
+  - `cargo test -p veil-cli --test phase2_gates` PASS (policy lint prints policy_id; rejects unknown fields)
 
 ### T-0202
-- status: TODO
+- status: DONE
 - evidence:
+  - Canonical policy bundle hashing tests:
+    - `cargo test -p veil-policy --test policy_bundle_id` PASS
+  - policy_id immutability enforced:
+    - `cargo test -p veil-cli --test cli_smoke` PASS (resume refuses on policy mismatch)
+    - `cargo test -p veil-cli --test phase2_gates` PASS (verify refuses on policy mismatch; pack_manifest policy_id matches computed policy_id)
 
 ### T-0203
-- status: TODO
+- status: DONE
 - evidence:
+  - Policy compiler produces deterministic detector set + per-class action plan and fails closed on invalid policy.
+  - `cargo test -p veil-cli --test phase2_gates` PASS (policy lint path exercises policy compilation; invalid policies exit 3)
 
 ### T-0204
-- status: TODO
+- status: DONE
 - evidence:
+  - Strict is the only supported baseline in v1; non-strict strictness fails closed:
+    - `cargo test -p veil-cli --test phase2_gates` PASS (run refuses `--strictness permissive`)
+  - Strict enforcement paths covered by Phase 1 gates (UNKNOWN coverage/residual/quarantine behavior):
+    - `cargo test -p veil-cli --test phase1_gates` PASS
 
 ### T-0301
 - status: TODO
@@ -280,8 +294,11 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test -p veil-cli --test phase1_gates` PASS (canary string absent from logs/evidence/quarantine index + sanitized)
 
 ### G-SEC-POLICY-ID-IMMUTABLE
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-policy --test policy_bundle_id` PASS (canonical policy bundle hashing)
+  - `cargo test -p veil-cli --test cli_smoke` PASS (resume refuses when policy_id mismatches ledger)
+  - `cargo test -p veil-cli --test phase2_gates` PASS (verify refuses on policy_id mismatch; policy_id bound in pack_manifest)
 
 ### G-SEC-COVERAGE-ENFORCED
 - status: TODO
@@ -293,8 +310,12 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test -p veil-cli --test phase1_gates` PASS (residual verification quarantines; `veil verify` catches tampered VERIFIED output)
 
 ### G-SEC-KEY-HANDLING
-- status: TODO
+- status: DONE
 - evidence:
+  - `cargo test -p veil-cli --test phase2_gates` PASS:
+    - tokenization disabled by default
+    - enabling tokenization without key fails to start
+    - evidence includes `proof_key_commitment` only; secret key is never persisted
 
 ### G-SEC-QUARANTINE-NO-RAW-DEFAULT
 - status: TODO
@@ -480,3 +501,4 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - 2026-02-05: PHASE_0 bootstrap started (Rust workspace scaffold + fail-closed CLI stub + boundary fitness check + CI baseline).
 - 2026-02-05: PHASE_1 baseline started (pack layout v1 output + resumability ledger/resume + pack schema version decision).
 - 2026-02-05: PHASE_1 core pipeline completed (extract/detect/transform/residual verify + atomic commit + determinism + canary tests).
+- 2026-02-05: PHASE_2 policy bundle completed (policy lint + immutability + key-handling gate tests).

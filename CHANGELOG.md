@@ -35,3 +35,8 @@
   - residual verification pass + `veil verify`
   - atomic staging + deterministic sanitized path mapping
 - Added Phase 1 gate tests (fail-closed terminal, residual verify, no-plaintext canary, determinism, atomic commit).
+
+### Policy bundle (PHASE_2 completed)
+- Implemented `veil policy lint` (strict validation + prints policy_id).
+- Enforced policy_id immutability across resume and verify with integration tests.
+- Hardened key-handling evidence: run manifest records `proof_key_commitment` (BLAKE3 of key) and tokenization scope when enabled, without persisting the secret key.

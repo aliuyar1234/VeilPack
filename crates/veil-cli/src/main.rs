@@ -70,6 +70,28 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         return exit_usage(exe, &msg, print_run_help);
     }
 
+    let proof_key_commitment = if parsed.enable_tokenization {
+        let key_path = match parsed.secret_key_file.as_ref() {
+            Some(p) => p,
+            None => {
+                return exit_usage(
+                    exe,
+                    "--enable-tokenization true requires --secret-key-file",
+                    print_run_help,
+                );
+            }
+        };
+        let bytes = match std::fs::read(key_path) {
+            Ok(b) => b,
+            Err(_) => {
+                return exit_usage(exe, "secret-key-file is unreadable (redacted)", print_run_help);
+            }
+        };
+        Some(blake3::hash(&bytes).to_hex().to_string())
+    } else {
+        None
+    };
+
     let policy = match veil_policy::load_policy_bundle(&parsed.policy) {
         Ok(p) => p,
         Err(_) => {
@@ -613,6 +635,12 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         },
         quarantine_reason_counts,
         tokenization_enabled: parsed.enable_tokenization,
+        tokenization_scope: if parsed.enable_tokenization {
+            Some(veil_domain::TokenizationScope::PerRun.as_str())
+        } else {
+            None
+        },
+        proof_key_commitment,
         quarantine_copy_enabled: parsed.quarantine_copy,
     };
     if write_json_atomic(&run_manifest_path, &run_manifest).is_err() {
@@ -841,8 +869,19 @@ fn cmd_policy_lint(exe: &str, args: &[String]) -> ExitCode {
         return exit_usage(exe, &msg, print_policy_lint_help);
     }
 
-    eprintln!("error: not implemented yet (fail-closed)");
-    ExitCode::from(EXIT_FATAL)
+    let policy = match veil_policy::load_policy_bundle(&parsed.policy) {
+        Ok(p) => p,
+        Err(_) => {
+            return exit_usage(
+                exe,
+                "policy bundle is invalid or unreadable (redacted)",
+                print_policy_lint_help,
+            );
+        }
+    };
+
+    println!("{}", policy.policy_id);
+    ExitCode::from(EXIT_OK)
 }
 
 fn exit_usage(exe: &str, message: &str, help: fn(&str)) -> ExitCode {
@@ -1439,6 +1478,10 @@ struct RunManifestJsonV1 {
     totals: RunTotals,
     quarantine_reason_counts: BTreeMap<String, u64>,
     tokenization_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tokenization_scope: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proof_key_commitment: Option<String>,
     quarantine_copy_enabled: bool,
 }
 
@@ -1704,9 +1747,9 @@ fn print_root_help(exe: &str) {
     println!("  {exe} <COMMAND> [FLAGS]");
     println!();
     println!("COMMANDS:");
-    println!("  run           Process a corpus into a Veil Pack (v1 stub)");
-    println!("  verify        Verify a Veil Pack output (v1 stub)");
-    println!("  policy lint   Validate policy bundle and compute policy_id (v1 stub)");
+    println!("  run           Process a corpus into a Veil Pack");
+    println!("  verify        Verify a Veil Pack output");
+    println!("  policy lint   Validate policy bundle and compute policy_id");
     println!();
     println!("Run '{exe} <COMMAND> --help' for command-specific help.");
 }
@@ -1746,7 +1789,7 @@ fn print_policy_help(exe: &str) {
     println!("  {exe} policy <SUBCOMMAND> [FLAGS]");
     println!();
     println!("SUBCOMMANDS:");
-    println!("  lint   Validate policy bundle and compute policy_id (v1 stub)");
+    println!("  lint   Validate policy bundle and compute policy_id");
 }
 
 fn print_policy_lint_help(exe: &str) {

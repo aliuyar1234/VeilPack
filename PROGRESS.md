@@ -12,16 +12,16 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 | T-0004 | PHASE_0_BOOTSTRAP | DONE |
 | T-0005 | PHASE_0_BOOTSTRAP | DONE |
 | T-0006 | PHASE_0_BOOTSTRAP | DONE |
-| T-0101 | PHASE_1_CORE_PIPELINE | TODO |
-| T-0102 | PHASE_1_CORE_PIPELINE | TODO |
+| T-0101 | PHASE_1_CORE_PIPELINE | DONE |
+| T-0102 | PHASE_1_CORE_PIPELINE | DONE |
 | T-0103 | PHASE_1_CORE_PIPELINE | TODO |
 | T-0104 | PHASE_1_CORE_PIPELINE | TODO |
 | T-0105 | PHASE_1_CORE_PIPELINE | TODO |
 | T-0106 | PHASE_1_CORE_PIPELINE | TODO |
 | T-0107 | PHASE_1_CORE_PIPELINE | TODO |
 | T-0108 | PHASE_1_CORE_PIPELINE | TODO |
-| T-0109 | PHASE_1_CORE_PIPELINE | TODO |
-| T-0110 | PHASE_1_CORE_PIPELINE | TODO |
+| T-0109 | PHASE_1_CORE_PIPELINE | DONE |
+| T-0110 | PHASE_1_CORE_PIPELINE | DONE |
 | T-0201 | PHASE_2_POLICY_BUNDLE | TODO |
 | T-0202 | PHASE_2_POLICY_BUNDLE | TODO |
 | T-0203 | PHASE_2_POLICY_BUNDLE | TODO |
@@ -94,12 +94,25 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - README updated with implementation bootstrap pointers (build/test/run + boundary check).
 
 ### T-0101
-- status: TODO
+- status: DONE
 - evidence:
+  - Deterministic corpus enumeration implemented (sorted directory entries; stable `ArtifactSortKey` ordering).
+  - Artifact identifiers computed per spec:
+    - `artifact_id = BLAKE3(file bytes)`
+    - `source_locator_hash = BLAKE3(normalized relative path)`
+  - Plaintext paths are not emitted to evidence outputs (asserted by CLI smoke tests).
+  - `cargo test --workspace` PASS
 
 ### T-0102
-- status: TODO
+- status: DONE
 - evidence:
+  - Ledger schema v1 implemented as SQLite at `<pack_root>/evidence/ledger.sqlite3` (atomic transitions via transactions).
+  - Resume semantics implemented:
+    - output directory is accepted for resume only when an in-progress marker and ledger exist
+    - refuses resume when the in-progress marker/run_id does not match (covers policy_id and corpus drift)
+    - skips terminal artifacts (VERIFIED/QUARANTINED) on resume
+  - Resume tests:
+    - `cargo test -p veil-cli --test cli_smoke` PASS
 
 ### T-0103
 - status: TODO
@@ -126,12 +139,20 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
 
 ### T-0109
-- status: TODO
+- status: DONE
 - evidence:
+  - Exit code semantics enforced:
+    - `2` when any artifacts are QUARANTINED
+    - `0` only when no quarantines exist
+  - Quarantine reason codes emitted as stable, non-sensitive codes (v1 baseline uses `UNKNOWN_COVERAGE`).
+  - `cargo test --workspace` PASS
 
 ### T-0110
-- status: TODO
+- status: DONE
 - evidence:
+  - `veil run` creates Veil Pack layout v1 and writes `pack_manifest.json` last.
+  - Uses an in-progress marker in workdir and removes it on successful completion.
+  - `cargo test --workspace` PASS
 
 ### T-0201
 - status: TODO
@@ -286,6 +307,8 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
   - Regenerate: `python checks/generate_manifest.py`
   - Verify (CHK-MANIFEST-VERIFY): PASS
+  - Regenerate: `python checks/generate_manifest.py` (post changes)
+  - Verify (CHK-MANIFEST-VERIFY): PASS
 
 ### CHK-FORBIDDEN-TERMS
 - status: DONE
@@ -308,11 +331,13 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - status: DONE
 - evidence:
   - PASS
+  - `python -c` (see `checks/CHECKS_INDEX.md` CHK-EVIDENCE-POINTER-FORMAT) PASS
 
 ### CHK-REF-INTEGRITY
 - status: DONE
 - evidence:
   - PASS (evidence pointers resolve; referenced IDs exist)
+  - Evidence pointer resolution check (path exists + phrase present): PASS
 
 ### CHK-NO-ADHOC-FILES
 - status: DONE
@@ -328,6 +353,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - status: DONE
 - evidence:
   - `python checks/boundary_fitness.py` PASS (automated)
+  - `cargo test --workspace` PASS (includes boundary fitness test)
 
 ### CHK-OFFLINE-ENFORCEMENT
 - status: TODO
@@ -405,3 +431,4 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 
 - 2026-02-03: Initial SSOT pack generation.
 - 2026-02-05: PHASE_0 bootstrap started (Rust workspace scaffold + fail-closed CLI stub + boundary fitness check + CI baseline).
+- 2026-02-05: PHASE_1 baseline started (pack layout v1 output + resumability ledger/resume + pack schema version decision).

@@ -20,3 +20,8 @@
 - Added BLAKE3 hashing utilities (artifact_id/source_locator_hash/run_id) and policy bundle hashing (policy_id).
 - Defined `--limits-json` schema `limits.v1`, implemented parsing, and added CLI tests.
 - Updated decisions (D-0011, D-0012) and contracts (`spec/04`).
+
+### Core pipeline baseline (PHASE_1 started)
+- Implemented a minimal `veil run` that emits Veil Pack layout v1 (sanitized/quarantine/evidence + pack_manifest).
+- Added SQLite ledger v1 (`ledger.sqlite3`) and safe resume support using an in-progress marker.
+- Logged `pack_schema_version` literal `pack.v1` (D-0013) and updated `spec/04` accordingly.

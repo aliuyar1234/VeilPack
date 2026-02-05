@@ -71,7 +71,7 @@ fn run_accepts_valid_limits_json() {
         .expect("run veil run");
 
     // Valid limits-json should pass validation and hit the fail-closed stub path.
-    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.status.code(), Some(2));
 }
 
 #[test]

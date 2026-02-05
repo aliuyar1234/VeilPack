@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 veil-domain = { path = "../veil-domain" }
 veil-verify = { path = "../veil-verify" }
+rusqlite = { version = "0.32", features = ["bundled"] }

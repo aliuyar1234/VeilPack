@@ -671,3 +671,49 @@ evidence: spec/11_QUALITY_GATES.md :: G-REL-ARCHIVE-LIMITS
 
 ### Fail-closed baseline behavior
 - If limits parsing or validation fails, the run MUST exit with invalid-arguments semantics (spec/04).
+
+---
+
+## D-0013 — Veil Pack schema version literal `pack.v1`
+
+### Decision statement
+- Veil Pack layout v1 is identified by `pack_schema_version = "pack.v1"` in `pack_manifest.json`.
+- Tools MUST refuse to operate on Veil Packs with an unknown `pack_schema_version` (fail closed).
+
+### Rationale
+- Makes the Veil Pack a versioned public contract independent of tool version.
+- Enables compatibility gating and safe evolution of layout and evidence schemas.
+
+### Alternatives considered
+- No schema version:
+  - rejected: ambiguous upgrades and compatibility behavior.
+- Use tool version as pack version:
+  - rejected: tool version may change without a schema change; packs should remain readable across patch releases.
+
+### Implications (what it affects)
+- `veil run` writes `pack_schema_version: "pack.v1"` for v1 packs.
+- `veil verify` MUST check `pack_schema_version` and fail closed on unknown values.
+
+### Affected files
+- spec/04_INTERFACES_AND_CONTRACTS.md (Veil Pack Layout v1)
+- crates/veil-cli/src/main.rs
+
+### Verification impact
+- Must exist:
+  - contract tests asserting `pack_manifest.json` contains `pack_schema_version` and required fields
+- Gates/checks:
+evidence: spec/11_QUALITY_GATES.md :: G-COMP-PACK-COMPAT
+evidence: spec/11_QUALITY_GATES.md :: G-COMP-CONTRACT-CONSISTENCY
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: YES (public artifact contract + downstream sharing)
+- unsafe/high-risk: YES (schema drift can cause unsafe reads/writes)
+- conservative baseline available: YES (explicit v1 literal + refuse unknown)
+- safe to decide: YES (fully testable)
+
+### Conservative baseline
+- YES (`pack.v1` + refuse unknown pack_schema_version)
+
+### Fail-closed baseline behavior
+- If `pack_schema_version` is missing or unknown, Veil MUST refuse to verify the pack.

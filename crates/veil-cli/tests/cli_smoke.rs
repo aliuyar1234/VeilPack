@@ -1,6 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use veil_domain::{
+    ArtifactSortKey, compute_input_corpus_id, compute_run_id, hash_artifact_id,
+    hash_source_locator_hash,
+};
+
 fn veil_cmd() -> Command {
     Command::new(env!("CARGO_BIN_EXE_veil"))
 }
@@ -56,7 +61,7 @@ fn run_missing_flags_is_usage_error() {
 }
 
 #[test]
-fn run_valid_args_fails_closed_until_implemented() {
+fn run_valid_args_produces_pack_with_quarantines() {
     let input = TestDir::new("input");
     std::fs::write(input.join("a.txt"), "hello").expect("write input file");
 
@@ -76,10 +81,134 @@ fn run_valid_args_fails_closed_until_implemented() {
         .output()
         .expect("run veil run");
 
-    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.status.code(), Some(2));
 
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("fail-closed"));
+    assert!(output.join("pack_manifest.json").is_file());
+    assert!(output.join("sanitized").is_dir());
+    assert!(output.join("quarantine").is_dir());
+    assert!(output.join("quarantine").join("index.ndjson").is_file());
+    assert!(!output.join("quarantine").join("raw").exists());
+    assert!(output.join("evidence").is_dir());
+    assert!(output.join("evidence").join("run_manifest.json").is_file());
+    assert!(output.join("evidence").join("artifacts.ndjson").is_file());
+    assert!(output.join("evidence").join("ledger.sqlite3").is_file());
+
+    let quarantine_index = std::fs::read_to_string(output.join("quarantine").join("index.ndjson"))
+        .expect("read quarantine index");
+    assert!(!quarantine_index.contains("a.txt"));
+
+    let artifacts_ndjson =
+        std::fs::read_to_string(output.join("evidence").join("artifacts.ndjson"))
+            .expect("read artifacts.ndjson");
+    assert!(!artifacts_ndjson.contains("a.txt"));
+
+    let run_manifest = std::fs::read_to_string(output.join("evidence").join("run_manifest.json"))
+        .expect("read run_manifest.json");
+    assert!(!run_manifest.contains("a.txt"));
+}
+
+#[test]
+fn run_resumes_when_in_progress_marker_and_ledger_exist() {
+    let input = TestDir::new("resume_input");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy = TestDir::new("resume_policy");
+    std::fs::write(policy.join("policy.json"), "{}").expect("write policy.json");
+    let policy_id = veil_policy::compute_policy_id(policy.path()).expect("compute policy_id");
+
+    let bytes = std::fs::read(input.join("a.txt")).expect("read input file");
+    let artifact_id = hash_artifact_id(&bytes);
+    let source_locator_hash = hash_source_locator_hash("a.txt");
+    let mut keys = vec![ArtifactSortKey::new(artifact_id, source_locator_hash)];
+    let input_corpus_id = compute_input_corpus_id(&mut keys);
+    let run_id = compute_run_id(env!("CARGO_PKG_VERSION"), &policy_id, &input_corpus_id);
+
+    let output = TestDir::new("resume_output");
+    std::fs::create_dir_all(output.join("sanitized")).expect("create sanitized");
+    std::fs::create_dir_all(output.join("quarantine")).expect("create quarantine");
+    std::fs::create_dir_all(output.join("evidence")).expect("create evidence");
+    std::fs::create_dir_all(output.join(".veil_work")).expect("create workdir");
+
+    let marker_path = output.join(".veil_work").join("in_progress.marker");
+    std::fs::write(&marker_path, run_id.to_string()).expect("write marker");
+
+    let ledger_path = output.join("evidence").join("ledger.sqlite3");
+    let _ledger = veil_evidence::Ledger::create_new(
+        &ledger_path,
+        env!("CARGO_PKG_VERSION"),
+        &policy_id,
+        &run_id,
+        &input_corpus_id,
+    )
+    .expect("create ledger");
+
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run (resume)");
+
+    assert_eq!(out.status.code(), Some(2));
+    assert!(output.join("pack_manifest.json").is_file());
+    assert!(!marker_path.exists());
+}
+
+#[test]
+fn run_resume_refuses_when_policy_mismatches_in_progress_pack() {
+    let input = TestDir::new("mismatch_input");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy_a = TestDir::new("policy_a");
+    std::fs::write(policy_a.join("policy.json"), "A").expect("write policy.json");
+    let policy_id_a = veil_policy::compute_policy_id(policy_a.path()).expect("compute policy_id");
+
+    let bytes = std::fs::read(input.join("a.txt")).expect("read input file");
+    let artifact_id = hash_artifact_id(&bytes);
+    let source_locator_hash = hash_source_locator_hash("a.txt");
+    let mut keys = vec![ArtifactSortKey::new(artifact_id, source_locator_hash)];
+    let input_corpus_id = compute_input_corpus_id(&mut keys);
+    let run_id = compute_run_id(env!("CARGO_PKG_VERSION"), &policy_id_a, &input_corpus_id);
+
+    let output = TestDir::new("mismatch_output");
+    std::fs::create_dir_all(output.join("sanitized")).expect("create sanitized");
+    std::fs::create_dir_all(output.join("quarantine")).expect("create quarantine");
+    std::fs::create_dir_all(output.join("evidence")).expect("create evidence");
+    std::fs::create_dir_all(output.join(".veil_work")).expect("create workdir");
+
+    let marker_path = output.join(".veil_work").join("in_progress.marker");
+    std::fs::write(&marker_path, run_id.to_string()).expect("write marker");
+
+    let ledger_path = output.join("evidence").join("ledger.sqlite3");
+    let _ledger = veil_evidence::Ledger::create_new(
+        &ledger_path,
+        env!("CARGO_PKG_VERSION"),
+        &policy_id_a,
+        &run_id,
+        &input_corpus_id,
+    )
+    .expect("create ledger");
+
+    let policy_b = TestDir::new("policy_b");
+    std::fs::write(policy_b.join("policy.json"), "B").expect("write policy.json");
+
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy_b.path())
+        .output()
+        .expect("run veil run (policy mismatch)");
+
+    assert_eq!(out.status.code(), Some(3));
+    assert!(marker_path.exists());
 }
 
 #[test]

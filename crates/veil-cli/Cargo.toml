@@ -6,7 +6,10 @@ edition = "2024"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+blake3 = "1"
 veil-domain = { path = "../veil-domain" }
+veil-evidence = { path = "../veil-evidence" }
+veil-policy = { path = "../veil-policy" }
 
 [[bin]]
 name = "veil"

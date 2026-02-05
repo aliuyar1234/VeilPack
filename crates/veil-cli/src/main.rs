@@ -1,12 +1,17 @@
+use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const EXIT_OK: u8 = 0;
 const EXIT_FATAL: u8 = 1;
 const EXIT_QUARANTINED: u8 = 2;
 const EXIT_USAGE: u8 = 3;
+
+const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
+const PACK_SCHEMA_VERSION: &str = "pack.v1";
 
 fn main() -> ExitCode {
     let mut args = std::env::args().collect::<Vec<String>>();
@@ -63,8 +68,302 @@ fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         return exit_usage(exe, &msg, print_run_help);
     }
 
-    eprintln!("error: not implemented yet (fail-closed)");
-    ExitCode::from(EXIT_FATAL)
+    let policy_id = match veil_policy::compute_policy_id(&parsed.policy) {
+        Ok(id) => id,
+        Err(_) => {
+            return exit_usage(
+                exe,
+                "policy bundle is invalid or unreadable (redacted)",
+                print_run_help,
+            );
+        }
+    };
+
+    let workdir = parsed
+        .workdir
+        .clone()
+        .unwrap_or_else(|| parsed.output.join(".veil_work"));
+    let marker_path = workdir.join("in_progress.marker");
+
+    let artifacts = match enumerate_input_corpus(&parsed.input) {
+        Ok(a) => a,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            return ExitCode::from(EXIT_FATAL);
+        }
+    };
+
+    let mut sort_keys = artifacts
+        .iter()
+        .map(|a| a.sort_key)
+        .collect::<Vec<veil_domain::ArtifactSortKey>>();
+    let input_corpus_id = veil_domain::compute_input_corpus_id(&mut sort_keys);
+    let run_id = veil_domain::compute_run_id(TOOL_VERSION, &policy_id, &input_corpus_id);
+
+    let policy_id_str = policy_id.to_string();
+    let input_corpus_id_str = input_corpus_id.to_string();
+    let run_id_str = run_id.to_string();
+
+    let is_resume = std::fs::metadata(&marker_path)
+        .map(|m| m.is_file())
+        .unwrap_or(false);
+
+    let evidence_dir = parsed.output.join("evidence");
+    let ledger_path = evidence_dir.join("ledger.sqlite3");
+
+    if is_resume {
+        let raw_dir = parsed.output.join("quarantine").join("raw");
+        let raw_present = raw_dir.exists();
+        if raw_present != parsed.quarantine_copy {
+            return exit_usage(
+                exe,
+                "cannot resume with different --quarantine-copy setting (redacted)",
+                print_run_help,
+            );
+        }
+    }
+
+    if let Err(msg) = create_pack_dirs(&parsed.output, parsed.quarantine_copy) {
+        eprintln!("error: {msg}");
+        return ExitCode::from(EXIT_FATAL);
+    }
+
+    if let Err(msg) = ensure_dir_exists_or_create(&workdir, "workdir") {
+        eprintln!("error: {msg}");
+        return ExitCode::from(EXIT_FATAL);
+    }
+
+    let mut ledger = if is_resume {
+        let marker_run_id = match std::fs::read_to_string(&marker_path) {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("error: could not read in-progress marker (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+        };
+        if marker_run_id.trim() != run_id_str {
+            return exit_usage(
+                exe,
+                "output directory contains an in-progress marker for a different run (redacted)",
+                print_run_help,
+            );
+        }
+
+        let ledger = match veil_evidence::Ledger::open_existing(&ledger_path) {
+            Ok(l) => l,
+            Err(_) => {
+                eprintln!("error: could not open ledger.sqlite3 for resume (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+        };
+
+        let meta_policy_id = match ledger.get_meta("policy_id") {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                eprintln!("error: ledger missing required meta key policy_id (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+            Err(_) => {
+                eprintln!("error: ledger read failed (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+        };
+        if meta_policy_id != policy_id_str {
+            return exit_usage(
+                exe,
+                "policy_id mismatch for resume (redacted)",
+                print_run_help,
+            );
+        }
+
+        let meta_run_id = match ledger.get_meta("run_id") {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                eprintln!("error: ledger missing required meta key run_id (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+            Err(_) => {
+                eprintln!("error: ledger read failed (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+        };
+        if meta_run_id != run_id_str {
+            return exit_usage(exe, "run_id mismatch for resume (redacted)", print_run_help);
+        }
+
+        let meta_input_corpus_id = match ledger.get_meta("input_corpus_id") {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                eprintln!("error: ledger missing required meta key input_corpus_id (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+            Err(_) => {
+                eprintln!("error: ledger read failed (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+        };
+        if meta_input_corpus_id != input_corpus_id_str {
+            return exit_usage(
+                exe,
+                "input_corpus_id mismatch for resume (redacted)",
+                print_run_help,
+            );
+        }
+
+        ledger
+    } else {
+        if std::fs::write(&marker_path, &run_id_str).is_err() {
+            eprintln!("error: could not write in-progress marker (redacted)");
+            return ExitCode::from(EXIT_FATAL);
+        }
+
+        match veil_evidence::Ledger::create_new(
+            &ledger_path,
+            TOOL_VERSION,
+            &policy_id,
+            &run_id,
+            &input_corpus_id,
+        ) {
+            Ok(l) => l,
+            Err(_) => {
+                eprintln!("error: could not create ledger.sqlite3 (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+        }
+    };
+
+    let quarantine_dir = parsed.output.join("quarantine");
+    let quarantine_index_path = quarantine_dir.join("index.ndjson");
+    let artifacts_ndjson_path = evidence_dir.join("artifacts.ndjson");
+
+    for artifact in artifacts.iter() {
+        let state = match ledger.artifact_summary(&artifact.sort_key.artifact_id) {
+            Ok(Some(s)) => s.state,
+            Ok(None) => veil_domain::ArtifactState::Discovered,
+            Err(_) => {
+                eprintln!("error: ledger read failed (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+        };
+        if state.is_terminal() {
+            continue;
+        }
+
+        let reason = veil_domain::QuarantineReasonCode::UnknownCoverage;
+        if ledger
+            .quarantine_artifact(
+                &artifact.sort_key.artifact_id,
+                &artifact.sort_key.source_locator_hash,
+                artifact.size_bytes,
+                &artifact.artifact_type,
+                reason,
+            )
+            .is_err()
+        {
+            eprintln!("error: ledger write failed (redacted)");
+            return ExitCode::from(EXIT_FATAL);
+        }
+    }
+
+    let mut results = Vec::with_capacity(artifacts.len());
+    for artifact in artifacts.iter() {
+        let summary = match ledger.artifact_summary(&artifact.sort_key.artifact_id) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                eprintln!("error: ledger missing artifact record (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+            Err(_) => {
+                eprintln!("error: ledger read failed (redacted)");
+                return ExitCode::from(EXIT_FATAL);
+            }
+        };
+
+        results.push(ArtifactRunResult {
+            sort_key: artifact.sort_key,
+            size_bytes: artifact.size_bytes,
+            artifact_type: artifact.artifact_type.clone(),
+            state: summary.state,
+            quarantine_reason_code: summary.quarantine_reason_code,
+        });
+    }
+
+    let mut quarantine_reason_counts = BTreeMap::<String, u64>::new();
+    let mut artifacts_verified = 0_u64;
+    let mut artifacts_quarantined = 0_u64;
+    for r in results.iter() {
+        match r.state {
+            veil_domain::ArtifactState::Verified => artifacts_verified += 1,
+            veil_domain::ArtifactState::Quarantined => {
+                artifacts_quarantined += 1;
+                let Some(code) = r.quarantine_reason_code.as_ref() else {
+                    eprintln!("error: quarantined artifact missing reason code (redacted)");
+                    return ExitCode::from(EXIT_FATAL);
+                };
+                *quarantine_reason_counts.entry(code.clone()).or_insert(0) += 1;
+            }
+            _ => {}
+        }
+    }
+
+    if let Err(msg) = write_quarantine_index(&quarantine_index_path, &results) {
+        eprintln!("error: {msg}");
+        return ExitCode::from(EXIT_FATAL);
+    }
+
+    if let Err(msg) = write_artifacts_evidence(&artifacts_ndjson_path, &results) {
+        eprintln!("error: {msg}");
+        return ExitCode::from(EXIT_FATAL);
+    }
+
+    let run_manifest_path = evidence_dir.join("run_manifest.json");
+    let run_manifest = RunManifestJsonV1 {
+        tool_version: TOOL_VERSION,
+        run_id: run_id_str.clone(),
+        policy_id: policy_id_str.clone(),
+        input_corpus_id: input_corpus_id_str.clone(),
+        totals: RunTotals {
+            artifacts_discovered: artifacts.len() as u64,
+            artifacts_verified,
+            artifacts_quarantined,
+        },
+        quarantine_reason_counts,
+        tokenization_enabled: parsed.enable_tokenization,
+        quarantine_copy_enabled: parsed.quarantine_copy,
+    };
+    if write_json_atomic(&run_manifest_path, &run_manifest).is_err() {
+        eprintln!("error: could not write run_manifest.json (redacted)");
+        return ExitCode::from(EXIT_FATAL);
+    }
+
+    let pack_manifest_path = parsed.output.join("pack_manifest.json");
+    let pack_manifest = PackManifestJsonV1 {
+        pack_schema_version: PACK_SCHEMA_VERSION,
+        tool_version: TOOL_VERSION,
+        run_id: run_id_str,
+        policy_id: policy_id_str,
+        input_corpus_id: input_corpus_id_str,
+        tokenization_enabled: parsed.enable_tokenization,
+        tokenization_scope: if parsed.enable_tokenization {
+            Some(veil_domain::TokenizationScope::PerRun.as_str())
+        } else {
+            None
+        },
+        quarantine_copy_enabled: parsed.quarantine_copy,
+        ledger_schema_version: veil_evidence::LEDGER_SCHEMA_VERSION,
+    };
+    if write_json_atomic(&pack_manifest_path, &pack_manifest).is_err() {
+        eprintln!("error: could not write pack_manifest.json (redacted)");
+        return ExitCode::from(EXIT_FATAL);
+    }
+
+    let _ = std::fs::remove_file(&marker_path);
+
+    if artifacts_quarantined > 0 {
+        ExitCode::from(EXIT_QUARANTINED)
+    } else {
+        ExitCode::from(EXIT_OK)
+    }
 }
 
 fn cmd_verify(exe: &str, args: &[String]) -> ExitCode {
@@ -232,10 +531,13 @@ fn validate_run_args(args: &RunArgs) -> Result<(), String> {
     ensure_dir_exists(&args.input, "input")?;
     ensure_dir_exists(&args.policy, "policy")?;
     ensure_policy_json_exists(&args.policy)?;
-    ensure_output_safe(&args.output)?;
+    let workdir = args
+        .workdir
+        .clone()
+        .unwrap_or_else(|| args.output.join(".veil_work"));
+    ensure_output_fresh_or_resumable(&args.output, &workdir, args.quarantine_copy)?;
 
-    if let Some(workdir) = &args.workdir
-        && let Ok(meta) = std::fs::metadata(workdir)
+    if let Ok(meta) = std::fs::metadata(&workdir)
         && !meta.is_dir()
     {
         return Err("workdir path must be a directory when it exists (redacted)".to_string());
@@ -399,16 +701,49 @@ fn ensure_policy_json_exists(policy_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_output_safe(output: &Path) -> Result<(), String> {
+fn ensure_output_fresh_or_resumable(
+    output: &Path,
+    workdir: &Path,
+    quarantine_copy_enabled: bool,
+) -> Result<(), String> {
     match std::fs::metadata(output) {
         Ok(meta) => {
             if !meta.is_dir() {
                 return Err("output path must be a directory when it exists (redacted)".to_string());
             }
+
             let mut entries = std::fs::read_dir(output)
                 .map_err(|_| "output path is not readable (redacted)".to_string())?;
-            if entries.next().is_some() {
-                return Err("output directory must be empty (redacted)".to_string());
+            if entries.next().is_none() {
+                return Ok(());
+            }
+
+            let marker_path = workdir.join("in_progress.marker");
+            let marker_meta = std::fs::metadata(&marker_path).map_err(|_| {
+                "output directory must be empty or resumable (redacted)".to_string()
+            })?;
+            if !marker_meta.is_file() {
+                return Err(
+                    "output directory contains an invalid in-progress marker (redacted)"
+                        .to_string(),
+                );
+            }
+
+            let ledger_path = output.join("evidence").join("ledger.sqlite3");
+            let ledger_meta = std::fs::metadata(&ledger_path).map_err(|_| {
+                "output directory must be empty or resumable (missing ledger) (redacted)"
+                    .to_string()
+            })?;
+            if !ledger_meta.is_file() {
+                return Err("ledger.sqlite3 must be a file (redacted)".to_string());
+            }
+
+            let raw_dir = output.join("quarantine").join("raw");
+            let raw_present = raw_dir.exists();
+            if raw_present != quarantine_copy_enabled {
+                return Err(
+                    "cannot resume with different --quarantine-copy setting (redacted)".to_string(),
+                );
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -470,6 +805,329 @@ fn load_archive_limits_from_json(path: &Path) -> Result<veil_domain::ArchiveLimi
     Ok(limits)
 }
 
+#[derive(Debug, Clone)]
+struct DiscoveredArtifact {
+    sort_key: veil_domain::ArtifactSortKey,
+    size_bytes: u64,
+    artifact_type: String,
+}
+
+#[derive(Debug, Clone)]
+struct ArtifactRunResult {
+    sort_key: veil_domain::ArtifactSortKey,
+    size_bytes: u64,
+    artifact_type: String,
+    state: veil_domain::ArtifactState,
+    quarantine_reason_code: Option<String>,
+}
+
+fn create_pack_dirs(pack_root: &Path, quarantine_copy_enabled: bool) -> Result<(), String> {
+    ensure_dir_exists_or_create(pack_root, "output")?;
+    ensure_dir_exists_or_create(&pack_root.join("sanitized"), "sanitized")?;
+    ensure_dir_exists_or_create(&pack_root.join("quarantine"), "quarantine")?;
+    ensure_dir_exists_or_create(&pack_root.join("evidence"), "evidence")?;
+
+    if quarantine_copy_enabled {
+        ensure_dir_exists_or_create(&pack_root.join("quarantine").join("raw"), "quarantine/raw")?;
+    }
+
+    Ok(())
+}
+
+fn ensure_dir_exists_or_create(path: &Path, kind: &str) -> Result<(), String> {
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            if !meta.is_dir() {
+                return Err(format!("{kind} path must be a directory (redacted)"));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(path)
+                .map_err(|_| format!("{kind} path could not be created (redacted)"))?;
+        }
+        Err(_) => {
+            return Err(format!("{kind} path is not accessible (redacted)"));
+        }
+    }
+    Ok(())
+}
+
+fn enumerate_input_corpus(input_root: &Path) -> Result<Vec<DiscoveredArtifact>, String> {
+    let mut out = Vec::new();
+    collect_input_files(input_root, input_root, &mut out)?;
+    out.sort_by(|a, b| a.sort_key.cmp(&b.sort_key));
+    Ok(out)
+}
+
+fn collect_input_files(
+    root: &Path,
+    current: &Path,
+    out: &mut Vec<DiscoveredArtifact>,
+) -> Result<(), String> {
+    let read_dir = std::fs::read_dir(current)
+        .map_err(|_| "input corpus directory is not readable (redacted)".to_string())?;
+
+    let mut entries = Vec::new();
+    for entry in read_dir {
+        let entry = entry
+            .map_err(|_| "input corpus directory entry could not be read (redacted)".to_string())?;
+        let name = entry
+            .file_name()
+            .to_str()
+            .ok_or_else(|| "input corpus contains a non-UTF-8 path (redacted)".to_string())?
+            .to_string();
+        entries.push((name, entry));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    for (_, entry) in entries {
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "input corpus entry type could not be read (redacted)".to_string())?;
+        if file_type.is_symlink() {
+            return Err("input corpus contains an unsafe path (symlink) (redacted)".to_string());
+        }
+
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_input_files(root, &path, out)?;
+            continue;
+        }
+
+        if file_type.is_file() {
+            let rel = path
+                .strip_prefix(root)
+                .map_err(|_| "input corpus path normalization failed (redacted)".to_string())?;
+            let normalized_rel_path = normalize_rel_path(rel)?;
+            let source_locator_hash = veil_domain::hash_source_locator_hash(&normalized_rel_path);
+
+            let size_bytes = entry
+                .metadata()
+                .map_err(|_| "input corpus file metadata could not be read (redacted)".to_string())?
+                .len();
+            let artifact_id = hash_file_artifact_id(&path)?;
+
+            let artifact_type = classify_artifact_type(&path);
+            out.push(DiscoveredArtifact {
+                sort_key: veil_domain::ArtifactSortKey::new(artifact_id, source_locator_hash),
+                size_bytes,
+                artifact_type,
+            });
+        } else {
+            return Err(
+                "input corpus contains an unsupported filesystem entry (redacted)".to_string(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn normalize_rel_path(rel: &Path) -> Result<String, String> {
+    let mut out = String::new();
+    for (i, comp) in rel.components().enumerate() {
+        let name = match comp {
+            std::path::Component::Normal(os) => os,
+            _ => {
+                return Err(
+                    "input corpus path is not a normalized relative path (redacted)".to_string(),
+                );
+            }
+        };
+
+        let name = name
+            .to_str()
+            .ok_or_else(|| "input corpus contains a non-UTF-8 path (redacted)".to_string())?;
+        if i > 0 {
+            out.push('/');
+        }
+        out.push_str(name);
+    }
+    Ok(out)
+}
+
+fn hash_file_artifact_id(path: &Path) -> Result<veil_domain::ArtifactId, String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|_| "input artifact is not readable (redacted)".to_string())?;
+
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = [0_u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|_| "input artifact could not be read (redacted)".to_string())?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+
+    Ok(veil_domain::ArtifactId::from_digest(
+        veil_domain::Digest32::from_bytes(*hasher.finalize().as_bytes()),
+    ))
+}
+
+fn classify_artifact_type(path: &Path) -> String {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match ext.to_ascii_lowercase().as_str() {
+        "txt" => "TEXT",
+        "csv" => "CSV",
+        "tsv" => "TSV",
+        "json" => "JSON",
+        "ndjson" => "NDJSON",
+        _ => "FILE",
+    }
+    .to_string()
+}
+
+#[derive(Debug, Serialize)]
+struct RunTotals {
+    artifacts_discovered: u64,
+    artifacts_verified: u64,
+    artifacts_quarantined: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct RunManifestJsonV1 {
+    tool_version: &'static str,
+    run_id: String,
+    policy_id: String,
+    input_corpus_id: String,
+    totals: RunTotals,
+    quarantine_reason_counts: BTreeMap<String, u64>,
+    tokenization_enabled: bool,
+    quarantine_copy_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct PackManifestJsonV1 {
+    pack_schema_version: &'static str,
+    tool_version: &'static str,
+    run_id: String,
+    policy_id: String,
+    input_corpus_id: String,
+    tokenization_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tokenization_scope: Option<&'static str>,
+    quarantine_copy_enabled: bool,
+    ledger_schema_version: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct QuarantineIndexRecord<'a> {
+    artifact_id: &'a str,
+    source_locator_hash: &'a str,
+    reason_code: &'a str,
+}
+
+fn write_quarantine_index(path: &Path, artifacts: &[ArtifactRunResult]) -> Result<(), String> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| "could not create quarantine index (redacted)".to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "could not create quarantine index (redacted)".to_string())?;
+    let tmp_path = dir.join(format!("{file_name}.tmp"));
+
+    let file = std::fs::File::create(&tmp_path)
+        .map_err(|_| "could not create quarantine index (redacted)".to_string())?;
+    let mut writer = std::io::BufWriter::new(file);
+
+    for a in artifacts {
+        if a.state != veil_domain::ArtifactState::Quarantined {
+            continue;
+        }
+        let Some(reason_code) = a.quarantine_reason_code.as_deref() else {
+            return Err("quarantined artifact missing reason_code (redacted)".to_string());
+        };
+
+        let artifact_id = a.sort_key.artifact_id.to_string();
+        let source_locator_hash = a.sort_key.source_locator_hash.to_string();
+        let record = QuarantineIndexRecord {
+            artifact_id: &artifact_id,
+            source_locator_hash: &source_locator_hash,
+            reason_code,
+        };
+        let line = serde_json::to_string(&record)
+            .map_err(|_| "could not serialize quarantine index record (redacted)".to_string())?;
+        writer
+            .write_all(line.as_bytes())
+            .and_then(|_| writer.write_all(b"\n"))
+            .map_err(|_| "could not write quarantine index (redacted)".to_string())?;
+    }
+
+    writer
+        .flush()
+        .map_err(|_| "could not flush quarantine index (redacted)".to_string())?;
+    std::fs::rename(&tmp_path, path)
+        .map_err(|_| "could not persist quarantine index (redacted)".to_string())?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct ArtifactEvidenceRecord<'a> {
+    artifact_id: &'a str,
+    source_locator_hash: &'a str,
+    size_bytes: u64,
+    artifact_type: &'a str,
+    state: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quarantine_reason_code: Option<&'a str>,
+}
+
+fn write_artifacts_evidence(path: &Path, artifacts: &[ArtifactRunResult]) -> Result<(), String> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| "could not create artifacts evidence (redacted)".to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "could not create artifacts evidence (redacted)".to_string())?;
+    let tmp_path = dir.join(format!("{file_name}.tmp"));
+
+    let file = std::fs::File::create(&tmp_path)
+        .map_err(|_| "could not create artifacts evidence (redacted)".to_string())?;
+    let mut writer = std::io::BufWriter::new(file);
+
+    for a in artifacts {
+        let artifact_id = a.sort_key.artifact_id.to_string();
+        let source_locator_hash = a.sort_key.source_locator_hash.to_string();
+        let record = ArtifactEvidenceRecord {
+            artifact_id: &artifact_id,
+            source_locator_hash: &source_locator_hash,
+            size_bytes: a.size_bytes,
+            artifact_type: &a.artifact_type,
+            state: a.state.as_str(),
+            quarantine_reason_code: a.quarantine_reason_code.as_deref(),
+        };
+        let line = serde_json::to_string(&record)
+            .map_err(|_| "could not serialize artifacts evidence record (redacted)".to_string())?;
+        writer
+            .write_all(line.as_bytes())
+            .and_then(|_| writer.write_all(b"\n"))
+            .map_err(|_| "could not write artifacts evidence (redacted)".to_string())?;
+    }
+
+    writer
+        .flush()
+        .map_err(|_| "could not flush artifacts evidence (redacted)".to_string())?;
+    std::fs::rename(&tmp_path, path)
+        .map_err(|_| "could not persist artifacts evidence (redacted)".to_string())?;
+    Ok(())
+}
+
+fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), ()> {
+    let dir = path.parent().ok_or(())?;
+    let file_name = path.file_name().and_then(|n| n.to_str()).ok_or(())?;
+    let tmp_path = dir.join(format!("{file_name}.tmp"));
+
+    let bytes = serde_json::to_vec(value).map_err(|_| ())?;
+    std::fs::write(&tmp_path, bytes).map_err(|_| ())?;
+    std::fs::rename(&tmp_path, path).map_err(|_| ())?;
+    Ok(())
+}
+
 fn print_root_help(exe: &str) {
     println!("Veil (offline fail-closed privacy gate)");
     println!();
@@ -490,7 +1148,9 @@ fn print_run_help(exe: &str) {
     println!();
     println!("REQUIRED:");
     println!("  --input <PATH>     Input corpus root (read-only)");
-    println!("  --output <PATH>    Output Veil Pack root (must not exist or must be empty)");
+    println!(
+        "  --output <PATH>    Output Veil Pack root (new: must not exist or be empty; resume: must be an in-progress pack)"
+    );
     println!("  --policy <PATH>    Policy bundle directory");
     println!();
     println!("OPTIONAL:");

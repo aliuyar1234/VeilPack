@@ -8,7 +8,7 @@ Veil is a CLI-first batch tool. The CLI is a **public contract** and MUST be ver
 - Purpose: process an input corpus into a Veil Pack.
 - Required flags:
   - `--input <PATH>`: input corpus root (read-only)
-  - `--output <PATH>`: output Veil Pack root (must not exist or must be empty)
+  - `--output <PATH>`: output Veil Pack root (new run: must not exist or must be empty; resume: may be an in-progress Veil Pack for safe resume)
   - `--policy <PATH>`: policy bundle directory
 - Optional flags (selected):
   - `--workdir <PATH>`: work directory (default: `<output>/.veil_work/`)
@@ -90,10 +90,14 @@ The output directory of `veil run` is the Veil Pack root.
   - `input_corpus_id`
   - whether tokenization enabled and scope (but never the key)
   - whether quarantine raw copying enabled
+- `pack_schema_version` MUST equal `"pack.v1"` for layout v1.
 - `sanitized/` MUST contain only VERIFIED artifacts.
 - `quarantine/index.ndjson` MUST contain all QUARANTINED artifacts.
 - Evidence MUST never contain plaintext sensitive values.
 evidence: CONSTITUTION.md :: C-003 No plaintext sensitive values in logs/reports/evidence
+
+Decision:
+evidence: DECISIONS.md :: ## D-0013
 
 ---
 

@@ -63,10 +63,12 @@ fn pdf_redaction_example_stays_valid() {
     let demo = root.join("examples").join("pdf-redaction");
     let input = demo.join("input");
     let policy = demo.join("policy");
+    let limits = demo.join("limits.json");
     let expected_path = demo.join("expected").join("invoice.sanitized.ndjson");
 
     assert!(input.is_dir(), "demo input directory missing");
     assert!(policy.is_dir(), "demo policy directory missing");
+    assert!(limits.is_file(), "demo limits file missing");
     assert!(expected_path.is_file(), "expected output file missing");
 
     let expected = std::fs::read_to_string(&expected_path).expect("read expected output");
@@ -81,6 +83,8 @@ fn pdf_redaction_example_stays_valid() {
         .arg(output.path())
         .arg("--policy")
         .arg("examples/pdf-redaction/policy")
+        .arg("--limits-json")
+        .arg("examples/pdf-redaction/limits.json")
         .output()
         .expect("run pdf demo");
 

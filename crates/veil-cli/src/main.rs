@@ -830,6 +830,7 @@ struct DiskLimitsOverride {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PdfLimitsOverride {
+    enabled: Option<bool>,
     output_mode: Option<String>,
     #[serde(default)]
     worker: PdfWorkerLimitsOverride,
@@ -898,6 +899,7 @@ impl Default for PdfWorkerOptions {
 struct RuntimeLimits {
     archive_limits: veil_domain::ArchiveLimits,
     max_workdir_bytes: u64,
+    pdf_enabled: bool,
     pdf_ocr: veil_extract::PdfOcrOptions,
     pdf_output_mode: PdfOutputMode,
     pdf_worker: PdfWorkerOptions,
@@ -908,6 +910,7 @@ impl Default for RuntimeLimits {
         Self {
             archive_limits: veil_domain::ArchiveLimits::default(),
             max_workdir_bytes: DEFAULT_MAX_WORKDIR_BYTES,
+            pdf_enabled: false,
             pdf_ocr: veil_extract::PdfOcrOptions::default(),
             pdf_output_mode: PdfOutputMode::DerivedNdjson,
             pdf_worker: PdfWorkerOptions::default(),
@@ -928,6 +931,7 @@ fn load_runtime_limits_from_json(path: &Path) -> Result<RuntimeLimits, String> {
 
     let mut archive_limits = veil_domain::ArchiveLimits::default();
     let mut max_workdir_bytes = DEFAULT_MAX_WORKDIR_BYTES;
+    let mut pdf_enabled = false;
     let mut pdf_ocr = veil_extract::PdfOcrOptions::default();
     let mut pdf_output_mode = PdfOutputMode::DerivedNdjson;
     let mut pdf_worker = PdfWorkerOptions::default();
@@ -966,6 +970,9 @@ fn load_runtime_limits_from_json(path: &Path) -> Result<RuntimeLimits, String> {
             return Err("limits-json max_workdir_bytes must be >= 1".to_string());
         }
         max_workdir_bytes = v;
+    }
+    if let Some(enabled) = parsed.pdf.enabled {
+        pdf_enabled = enabled;
     }
     if let Some(raw) = parsed.pdf.output_mode.as_deref() {
         pdf_output_mode = PdfOutputMode::from_limits_value(raw).ok_or_else(|| {
@@ -1022,6 +1029,7 @@ fn load_runtime_limits_from_json(path: &Path) -> Result<RuntimeLimits, String> {
     Ok(RuntimeLimits {
         archive_limits,
         max_workdir_bytes,
+        pdf_enabled,
         pdf_ocr,
         pdf_output_mode,
         pdf_worker,
@@ -2207,7 +2215,7 @@ fn print_run_help(exe: &str) {
     println!("  --quarantine-copy true|false    Default: false");
     println!("  --limits-json <PATH>            Optional JSON file overriding safety limits");
     println!(
-        "                                  (includes pdf.output_mode, pdf.worker.*, pdf.ocr.* runtime knobs)"
+        "                                  (includes pdf.enabled, pdf.output_mode, pdf.worker.*, pdf.ocr.* runtime knobs)"
     );
 }
 

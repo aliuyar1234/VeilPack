@@ -1,0 +1,6 @@
+{
+  "schema_version": "limits.v1",
+  "pdf": {
+    "enabled": true
+  }
+}

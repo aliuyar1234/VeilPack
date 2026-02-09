@@ -962,6 +962,39 @@ fn zip_extension_with_ndjson_payload_quarantines_parse_error() {
 }
 
 #[test]
+fn pdf_is_quarantined_when_disabled_by_default() {
+    let input = TestDir::new("pdf_disabled_default_input");
+    let pdf_bytes = make_pdf_with_text("hello SECRET");
+    std::fs::write(input.join("a.pdf"), &pdf_bytes).expect("write a.pdf");
+
+    let policy = TestDir::new("pdf_disabled_default_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("pdf_disabled_default_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.pdf").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "UNSUPPORTED_FORMAT");
+}
+
+#[test]
 fn pdf_searchable_text_is_sanitized() {
     let input = TestDir::new("pdf_text_input");
     let pdf_bytes = make_pdf_with_text("hello SECRET");
@@ -970,6 +1003,11 @@ fn pdf_searchable_text_is_sanitized() {
     let policy = TestDir::new("pdf_text_policy");
     std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
         .expect("write policy.json");
+    let limits = TestDir::new("pdf_text_limits");
+    let limits_json = write_limits_json(
+        &limits,
+        r#"{"schema_version":"limits.v1","pdf":{"enabled":true}}"#,
+    );
 
     let output = TestDir::new("pdf_text_output");
     let out = veil_cmd()
@@ -980,6 +1018,8 @@ fn pdf_searchable_text_is_sanitized() {
         .arg(output.path())
         .arg("--policy")
         .arg(policy.path())
+        .arg("--limits-json")
+        .arg(limits_json)
         .output()
         .expect("run veil run");
 
@@ -1005,7 +1045,7 @@ fn pdf_searchable_text_safe_pdf_mode_outputs_pdf_and_verifies() {
     let limits = TestDir::new("pdf_text_safe_pdf_limits");
     let limits_json = write_limits_json(
         &limits,
-        r#"{"schema_version":"limits.v1","pdf":{"output_mode":"safe_pdf"}}"#,
+        r#"{"schema_version":"limits.v1","pdf":{"enabled":true,"output_mode":"safe_pdf"}}"#,
     );
 
     let output = TestDir::new("pdf_text_safe_pdf_output");
@@ -1054,6 +1094,11 @@ fn pdf_graphics_only_quarantines_ocr_required_but_disabled() {
     let policy = TestDir::new("pdf_graphics_policy");
     std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
         .expect("write policy.json");
+    let limits = TestDir::new("pdf_graphics_limits");
+    let limits_json = write_limits_json(
+        &limits,
+        r#"{"schema_version":"limits.v1","pdf":{"enabled":true}}"#,
+    );
 
     let output = TestDir::new("pdf_graphics_output");
     let out = veil_cmd()
@@ -1064,6 +1109,8 @@ fn pdf_graphics_only_quarantines_ocr_required_but_disabled() {
         .arg(output.path())
         .arg("--policy")
         .arg(policy.path())
+        .arg("--limits-json")
+        .arg(limits_json)
         .output()
         .expect("run veil run");
 
@@ -1102,6 +1149,7 @@ fn pdf_graphics_only_with_ocr_command_is_sanitized() {
         &json!({
             "schema_version": "limits.v1",
             "pdf": {
+                "enabled": true,
                 "ocr": {
                     "enabled": true,
                     "command": [python_executable(), script_str],
@@ -1159,6 +1207,7 @@ fn pdf_graphics_only_with_ocr_command_failure_quarantines_pdf_ocr_failed() {
         &json!({
             "schema_version": "limits.v1",
             "pdf": {
+                "enabled": true,
                 "ocr": {
                     "enabled": true,
                     "command": [python_executable(), script_str],
@@ -1204,6 +1253,11 @@ fn pdf_with_open_action_quarantines_actions_present() {
     let policy = TestDir::new("pdf_open_action_policy");
     std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
         .expect("write policy.json");
+    let limits = TestDir::new("pdf_open_action_limits");
+    let limits_json = write_limits_json(
+        &limits,
+        r#"{"schema_version":"limits.v1","pdf":{"enabled":true}}"#,
+    );
 
     let output = TestDir::new("pdf_open_action_output");
     let out = veil_cmd()
@@ -1214,6 +1268,8 @@ fn pdf_with_open_action_quarantines_actions_present() {
         .arg(output.path())
         .arg("--policy")
         .arg(policy.path())
+        .arg("--limits-json")
+        .arg(limits_json)
         .output()
         .expect("run veil run");
 
@@ -1236,6 +1292,11 @@ fn pdf_malformed_quarantines_pdf_parse_error() {
     let policy = TestDir::new("pdf_malformed_policy");
     std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
         .expect("write policy.json");
+    let limits = TestDir::new("pdf_malformed_limits");
+    let limits_json = write_limits_json(
+        &limits,
+        r#"{"schema_version":"limits.v1","pdf":{"enabled":true}}"#,
+    );
 
     let output = TestDir::new("pdf_malformed_output");
     let out = veil_cmd()
@@ -1246,6 +1307,8 @@ fn pdf_malformed_quarantines_pdf_parse_error() {
         .arg(output.path())
         .arg("--policy")
         .arg(policy.path())
+        .arg("--limits-json")
+        .arg(limits_json)
         .output()
         .expect("run veil run");
 

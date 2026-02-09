@@ -533,7 +533,7 @@ fn run_quarantines_pdf_when_max_pdf_pages_exceeded() {
     let limits_path = limits.join("limits.json");
     std::fs::write(
         &limits_path,
-        br#"{"schema_version":"limits.v1","archive":{"max_pdf_pages":1}}"#,
+        br#"{"schema_version":"limits.v1","archive":{"max_pdf_pages":1},"pdf":{"enabled":true}}"#,
     )
     .expect("write limits.json");
 

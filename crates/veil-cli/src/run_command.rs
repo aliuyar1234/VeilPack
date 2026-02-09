@@ -23,6 +23,7 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         None => RuntimeLimits::default(),
     };
     let archive_limits = runtime_limits.archive_limits;
+    let pdf_enabled = runtime_limits.pdf_enabled;
     let pdf_ocr_limits = runtime_limits.pdf_ocr.clone();
     let pdf_output_mode = runtime_limits.pdf_output_mode;
     let pdf_worker_limits = runtime_limits.pdf_worker.clone();
@@ -525,6 +526,36 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             artifact_id: &artifact.sort_key.artifact_id,
             source_locator_hash: &artifact.sort_key.source_locator_hash,
         };
+        if artifact.artifact_type == "PDF" && !pdf_enabled {
+            if ledger
+                .quarantine(
+                    &artifact.sort_key.artifact_id,
+                    veil_domain::QuarantineReasonCode::UnsupportedFormat,
+                )
+                .is_err()
+            {
+                log_error(
+                    log_ctx,
+                    "ledger_write_failed",
+                    "INTERNAL_ERROR",
+                    Some("ledger write failed (redacted)"),
+                );
+                return ExitCode::from(EXIT_FATAL);
+            }
+            if write_quarantine_raw_or_fail(
+                parsed.quarantine_copy,
+                &quarantine_raw_dir,
+                &artifact.sort_key,
+                &artifact.artifact_type,
+                &bytes,
+                log_ctx,
+            )
+            .is_err()
+            {
+                return ExitCode::from(EXIT_FATAL);
+            }
+            continue;
+        }
         let extracted = if artifact.artifact_type == "PDF" && pdf_worker_limits.enabled {
             extract_pdf_via_worker(
                 ctx,

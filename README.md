@@ -94,7 +94,7 @@ flowchart LR
 | Group | Types |
 |---|---|
 | Text and structured | `.txt`, `.csv`, `.tsv`, `.json`, `.ndjson` |
-| PDF | `.pdf` (default output: canonical NDJSON; optional `safe_pdf` output mode; image-only pages use optional local OCR via `limits.v1` `pdf.ocr.*`; fail-closed quarantine when OCR is required but unavailable/failing) |
+| PDF | `.pdf` (implemented but disabled by default; requires explicit opt-in via `limits.v1` `pdf.enabled=true`; supports `derived_ndjson` default and optional `safe_pdf` output mode) |
 | Container and compound | `.zip`, `.tar`, `.eml`, `.mbox`, `.docx`, `.pptx`, `.xlsx` |
 
 Notes:
@@ -202,6 +202,8 @@ This demo is also enforced by integration test:
 `cargo test -p veil-cli --test examples_csv_demo`
 
 ## Worked Example (PDF)
+PDF processing is disabled by default in `master`. Without explicit opt-in, `.pdf` artifacts are quarantined with `UNSUPPORTED_FORMAT`.
+
 Use the committed end-to-end demo under `examples/pdf-redaction`:
 
 - walkthrough: `examples/pdf-redaction/README.md`
@@ -215,7 +217,8 @@ Run it:
 cargo run -p veil-cli -- run \
   --input examples/pdf-redaction/input \
   --output examples/pdf-redaction/out \
-  --policy examples/pdf-redaction/policy
+  --policy examples/pdf-redaction/policy \
+  --limits-json examples/pdf-redaction/limits.json
 ```
 
 Then inspect:
@@ -234,6 +237,7 @@ OCR remains strictly local and opt-in. Configure it via `--limits-json`:
 {
   "schema_version": "limits.v1",
   "pdf": {
+    "enabled": true,
     "output_mode": "derived_ndjson",
     "worker": {
       "enabled": true,

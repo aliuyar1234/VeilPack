@@ -18,6 +18,7 @@ VeilPack is an offline, fail-closed privacy gate for enterprise data pipelines. 
 - [CLI Overview](#cli-overview)
 - [Quickstart](#quickstart)
 - [Worked Example (CSV)](#worked-example-csv)
+- [Worked Example (PDF)](#worked-example-pdf)
 - [Output Layout](#output-layout)
 - [Exit Codes](#exit-codes)
 - [Development and Quality Gates](#development-and-quality-gates)
@@ -93,6 +94,7 @@ flowchart LR
 | Group | Types |
 |---|---|
 | Text and structured | `.txt`, `.csv`, `.tsv`, `.json`, `.ndjson` |
+| PDF | `.pdf` (text-layer extraction to canonical NDJSON; image-only pages quarantine fail-closed when OCR is required but not enabled) |
 | Container and compound | `.zip`, `.tar`, `.eml`, `.mbox`, `.docx`, `.pptx`, `.xlsx` |
 
 Notes:
@@ -198,6 +200,32 @@ cat examples/csv-redaction/out/sanitized/*.csv
 
 This demo is also enforced by integration test:
 `cargo test -p veil-cli --test examples_csv_demo`
+
+## Worked Example (PDF)
+Use the committed end-to-end demo under `examples/pdf-redaction`:
+
+- walkthrough: `examples/pdf-redaction/README.md`
+- input corpus: `examples/pdf-redaction/input/invoice.pdf`
+- policy: `examples/pdf-redaction/policy/policy.json`
+- expected sanitized content: `examples/pdf-redaction/expected/invoice.sanitized.ndjson`
+
+Run it:
+
+```bash
+cargo run -p veil-cli -- run \
+  --input examples/pdf-redaction/input \
+  --output examples/pdf-redaction/out \
+  --policy examples/pdf-redaction/policy
+```
+
+Then inspect:
+
+```bash
+cat examples/pdf-redaction/out/sanitized/*.ndjson
+```
+
+This demo is also enforced by integration test:
+`cargo test -p veil-cli --test examples_pdf_demo`
 
 ## Output Layout
 `veil run` writes:

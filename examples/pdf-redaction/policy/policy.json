@@ -1,0 +1,20 @@
+{
+  "schema_version": "policy.v1",
+  "classes": [
+    {
+      "class_id": "PII.Secret",
+      "severity": "HIGH",
+      "detectors": [
+        {
+          "kind": "regex",
+          "pattern": "SECRET"
+        }
+      ],
+      "action": {
+        "kind": "REDACT"
+      }
+    }
+  ],
+  "defaults": {},
+  "scopes": []
+}

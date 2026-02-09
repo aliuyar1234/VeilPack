@@ -17,6 +17,7 @@ VeilPack is an offline, fail-closed privacy gate for enterprise data pipelines. 
 - [Supported Input Formats](#supported-input-formats)
 - [CLI Overview](#cli-overview)
 - [Quickstart](#quickstart)
+- [Worked Example (CSV)](#worked-example-csv)
 - [Output Layout](#output-layout)
 - [Exit Codes](#exit-codes)
 - [Development and Quality Gates](#development-and-quality-gates)
@@ -171,6 +172,32 @@ cargo run -p veil-cli -- verify \
 ```bash
 cargo run -p veil-cli -- policy lint --policy ./policy
 ```
+
+## Worked Example (CSV)
+Use the committed end-to-end demo under `examples/csv-redaction`:
+
+- walkthrough: `examples/csv-redaction/README.md`
+- input corpus: `examples/csv-redaction/input/customers.csv`
+- policy: `examples/csv-redaction/policy/policy.json`
+- expected sanitized content: `examples/csv-redaction/expected/customers.sanitized.csv`
+
+Run it:
+
+```bash
+cargo run -p veil-cli -- run \
+  --input examples/csv-redaction/input \
+  --output examples/csv-redaction/out \
+  --policy examples/csv-redaction/policy
+```
+
+Then inspect:
+
+```bash
+cat examples/csv-redaction/out/sanitized/*.csv
+```
+
+This demo is also enforced by integration test:
+`cargo test -p veil-cli --test examples_csv_demo`
 
 ## Output Layout
 `veil run` writes:

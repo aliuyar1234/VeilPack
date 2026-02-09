@@ -1,0 +1,27 @@
+{
+  "schema_version": "policy.v1",
+  "classes": [
+    {
+      "class_id": "PII.Email",
+      "severity": "HIGH",
+      "detectors": [
+        {
+          "kind": "field_selector",
+          "selector": "csv_header",
+          "fields": [
+            "email"
+          ]
+        },
+        {
+          "kind": "regex",
+          "pattern": "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+        }
+      ],
+      "action": {
+        "kind": "REDACT"
+      }
+    }
+  ],
+  "defaults": {},
+  "scopes": []
+}

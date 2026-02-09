@@ -1,0 +1,3 @@
+customer_id,name,email,notes
+1,Alice,{{PII.Email}},priority_customer
+2,Bob,{{PII.Email}},call_after_5pm

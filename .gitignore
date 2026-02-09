@@ -16,3 +16,5 @@ DECISIONS.md
 PROGRESS.md
 QUESTIONS_FOR_USER.md
 spec/
+examples/**/out/
+examples/**/out*/

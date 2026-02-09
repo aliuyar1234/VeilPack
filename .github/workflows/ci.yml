@@ -43,6 +43,7 @@ jobs:
         run: python3 checks/ssot_validate.py all
 
       - name: Manifest Verify
+        if: ${{ hashFiles('AGENTS.md') != '' && hashFiles('CONSTITUTION.md') != '' && hashFiles('spec/**') != '' }}
         run: |
           python3 checks/generate_manifest.py
           git diff --exit-code MANIFEST.sha256

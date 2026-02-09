@@ -176,3 +176,35 @@ fn unsupported_type_quarantines() {
     };
     assert_eq!(reason, QuarantineReasonCode::UnsupportedFormat);
 }
+
+#[test]
+fn csv_inconsistent_columns_quarantines_parse_error() {
+    let reg = ExtractorRegistry::default();
+    let (artifact_id, source_locator_hash) = ctx();
+    let ctx = ArtifactContext {
+        artifact_id: &artifact_id,
+        source_locator_hash: &source_locator_hash,
+    };
+
+    let out = reg.extract_by_type("CSV", ctx, b"a,b\n1\n");
+    let ExtractOutcome::Quarantined { reason, .. } = out else {
+        panic!("expected quarantined");
+    };
+    assert_eq!(reason, QuarantineReasonCode::ParseError);
+}
+
+#[test]
+fn ndjson_invalid_record_quarantines_parse_error() {
+    let reg = ExtractorRegistry::default();
+    let (artifact_id, source_locator_hash) = ctx();
+    let ctx = ArtifactContext {
+        artifact_id: &artifact_id,
+        source_locator_hash: &source_locator_hash,
+    };
+
+    let out = reg.extract_by_type("NDJSON", ctx, b"{\"a\":1}\n{not-json}\n");
+    let ExtractOutcome::Quarantined { reason, .. } = out else {
+        panic!("expected quarantined");
+    };
+    assert_eq!(reason, QuarantineReasonCode::ParseError);
+}

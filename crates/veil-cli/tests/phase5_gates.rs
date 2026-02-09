@@ -401,3 +401,119 @@ fn resume_fails_closed_on_invalid_existing_artifacts_evidence() {
         .expect("run veil run (resume)");
     assert_eq!(resumed.status.code(), Some(1));
 }
+
+#[test]
+fn crash_after_quarantine_index_write_leaves_no_partial_manifests_and_resume_succeeds() {
+    let input = TestDir::new("resume_after_quarantine_index_input");
+    std::fs::write(input.join("a.txt"), "SECRET A").expect("write a.txt");
+    std::fs::write(input.join("b.txt"), "SECRET B").expect("write b.txt");
+
+    let policy = TestDir::new("resume_after_quarantine_index_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("resume_after_quarantine_index_output");
+    let out = veil_cmd()
+        .env("VEIL_FAILPOINT", "after_quarantine_index_write")
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run (crash)");
+    assert_eq!(out.status.code(), Some(1));
+
+    assert!(
+        !output.path().join("pack_manifest.json").exists(),
+        "pack_manifest must not exist on crash before completion"
+    );
+    assert!(
+        !output
+            .path()
+            .join("evidence")
+            .join("run_manifest.json")
+            .exists(),
+        "run_manifest must not exist on crash before completion"
+    );
+
+    let resumed = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run (resume)");
+    assert_eq!(resumed.status.code(), Some(0));
+    assert!(output.path().join("pack_manifest.json").is_file());
+    assert!(
+        output
+            .path()
+            .join("evidence")
+            .join("run_manifest.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn crash_after_artifacts_evidence_write_leaves_no_partial_manifests_and_resume_succeeds() {
+    let input = TestDir::new("resume_after_artifacts_evidence_input");
+    std::fs::write(input.join("a.txt"), "SECRET A").expect("write a.txt");
+    std::fs::write(input.join("b.txt"), "SECRET B").expect("write b.txt");
+
+    let policy = TestDir::new("resume_after_artifacts_evidence_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("resume_after_artifacts_evidence_output");
+    let out = veil_cmd()
+        .env("VEIL_FAILPOINT", "after_artifacts_evidence_write")
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run (crash)");
+    assert_eq!(out.status.code(), Some(1));
+
+    assert!(
+        !output.path().join("pack_manifest.json").exists(),
+        "pack_manifest must not exist on crash before completion"
+    );
+    assert!(
+        !output
+            .path()
+            .join("evidence")
+            .join("run_manifest.json")
+            .exists(),
+        "run_manifest must not exist on crash before completion"
+    );
+
+    let resumed = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run (resume)");
+    assert_eq!(resumed.status.code(), Some(0));
+    assert!(output.path().join("pack_manifest.json").is_file());
+    assert!(
+        output
+            .path()
+            .join("evidence")
+            .join("run_manifest.json")
+            .is_file()
+    );
+}

@@ -90,6 +90,8 @@ fn help_outputs_include_required_flags() {
     assert!(stdout.contains("--input"));
     assert!(stdout.contains("--output"));
     assert!(stdout.contains("--policy"));
+    assert!(stdout.contains("--limits-json"));
+    assert!(stdout.contains("--isolate-risky-extractors"));
 
     let out = veil_cmd()
         .args(["verify", "--help"])

@@ -254,6 +254,39 @@ fn zip_max_entries_limit_quarantines_entire_archive() {
 }
 
 #[test]
+fn zip_processing_can_be_isolated_in_worker_process() {
+    let input = TestDir::new("zip_isolated_input");
+    let zip_bytes = make_zip_bytes(
+        &[("a.txt", b"hello SECRET"), ("b.txt", b"safe")],
+        zip::CompressionMethod::Stored,
+    );
+    std::fs::write(input.join("a.zip"), &zip_bytes).expect("write a.zip");
+
+    let policy = TestDir::new("zip_isolated_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("zip_isolated_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .args(["--isolate-risky-extractors", "true"])
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(0));
+    let sanitized_path = expected_sanitized_path(output.path(), "a.zip", &zip_bytes, "ndjson");
+    let sanitized = std::fs::read_to_string(sanitized_path).expect("read sanitized");
+    assert!(!sanitized.contains("SECRET"));
+    assert!(sanitized.contains("{{PII.Test}}"));
+}
+
+#[test]
 fn zip_unsafe_path_quarantines_entire_archive() {
     let input = TestDir::new("zip_path_input");
     let zip_bytes = make_zip_bytes(&[("../evil.txt", b"hello")], zip::CompressionMethod::Stored);

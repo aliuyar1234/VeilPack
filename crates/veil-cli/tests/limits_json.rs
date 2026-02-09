@@ -312,3 +312,73 @@ fn run_quarantines_when_workdir_limit_would_be_exceeded() {
     let q = quarantine_index_text(output.path());
     assert!(q.contains("\"reason_code\":\"LIMIT_EXCEEDED\""));
 }
+
+#[test]
+fn run_rejects_limits_json_zero_max_processing_ms() {
+    let input = TestDir::new("input_limits_zero_processing_ms");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy = TestDir::new("policy_limits_zero_processing_ms");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("output_limits_zero_processing_ms");
+    let limits = TestDir::new("limits_zero_processing_ms");
+    let limits_path = limits.join("limits.json");
+    std::fs::write(
+        &limits_path,
+        br#"{"schema_version":"limits.v1","artifact":{"max_processing_ms":0}}"#,
+    )
+    .expect("write limits.json");
+
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(&limits_path)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
+fn run_quarantines_when_processing_time_limit_is_too_low() {
+    let input = TestDir::new("input_limits_processing_ms");
+    std::fs::write(input.join("a.json"), r#"{"v":"SECRET"}"#).expect("write input file");
+
+    let policy = TestDir::new("policy_limits_processing_ms");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("output_limits_processing_ms");
+    let limits = TestDir::new("limits_processing_ms");
+    let limits_path = limits.join("limits.json");
+    std::fs::write(
+        &limits_path,
+        br#"{"schema_version":"limits.v1","artifact":{"max_processing_ms":1}}"#,
+    )
+    .expect("write limits.json");
+
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(&limits_path)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let q = quarantine_index_text(output.path());
+    assert!(q.contains("\"reason_code\":\"LIMIT_EXCEEDED\""));
+}

@@ -583,14 +583,6 @@ impl Extractor for ZipExtractor {
     }
 
     fn extract(&self, _ctx: ArtifactContext<'_>, bytes: &[u8]) -> ExtractOutcome {
-        if let Some(values) = parse_ndjson_values(bytes) {
-            return ExtractOutcome::Extracted {
-                extractor_id: self.id(),
-                canonical: CanonicalArtifact::Ndjson(CanonicalNdjson { values }),
-                coverage: archive_coverage_full(),
-            };
-        }
-
         let values = match extract_zip_entries(self.limits, bytes, 1, None) {
             Ok(v) => v,
             Err(reason) => {
@@ -620,14 +612,6 @@ impl Extractor for TarExtractor {
     }
 
     fn extract(&self, _ctx: ArtifactContext<'_>, bytes: &[u8]) -> ExtractOutcome {
-        if let Some(values) = parse_ndjson_values(bytes) {
-            return ExtractOutcome::Extracted {
-                extractor_id: self.id(),
-                canonical: CanonicalArtifact::Ndjson(CanonicalNdjson { values }),
-                coverage: archive_coverage_full(),
-            };
-        }
-
         let values = match extract_tar_entries(self.limits, bytes, 1, None) {
             Ok(v) => v,
             Err(reason) => {
@@ -657,14 +641,6 @@ impl Extractor for EmlExtractor {
     }
 
     fn extract(&self, _ctx: ArtifactContext<'_>, bytes: &[u8]) -> ExtractOutcome {
-        if let Some(values) = parse_ndjson_values(bytes) {
-            return ExtractOutcome::Extracted {
-                extractor_id: self.id(),
-                canonical: CanonicalArtifact::Ndjson(CanonicalNdjson { values }),
-                coverage: email_coverage(true),
-            };
-        }
-
         let (values, has_attachments) = match extract_eml_entries(self.limits, bytes) {
             Ok(v) => v,
             Err(reason) => {
@@ -694,14 +670,6 @@ impl Extractor for MboxExtractor {
     }
 
     fn extract(&self, _ctx: ArtifactContext<'_>, bytes: &[u8]) -> ExtractOutcome {
-        if let Some(values) = parse_ndjson_values(bytes) {
-            return ExtractOutcome::Extracted {
-                extractor_id: self.id(),
-                canonical: CanonicalArtifact::Ndjson(CanonicalNdjson { values }),
-                coverage: email_coverage(true),
-            };
-        }
-
         let (values, has_attachments) = match extract_mbox_entries(self.limits, bytes) {
             Ok(v) => v,
             Err(reason) => {
@@ -731,14 +699,6 @@ impl Extractor for DocxExtractor {
     }
 
     fn extract(&self, _ctx: ArtifactContext<'_>, bytes: &[u8]) -> ExtractOutcome {
-        if let Some(values) = parse_ndjson_values(bytes) {
-            return ExtractOutcome::Extracted {
-                extractor_id: self.id(),
-                canonical: CanonicalArtifact::Ndjson(CanonicalNdjson { values }),
-                coverage: ooxml_coverage_full(),
-            };
-        }
-
         let (values, embedded_binaries) = match extract_ooxml_entries(self.limits, bytes) {
             Ok(v) => v,
             Err(reason) => {
@@ -772,14 +732,6 @@ impl Extractor for PptxExtractor {
     }
 
     fn extract(&self, _ctx: ArtifactContext<'_>, bytes: &[u8]) -> ExtractOutcome {
-        if let Some(values) = parse_ndjson_values(bytes) {
-            return ExtractOutcome::Extracted {
-                extractor_id: self.id(),
-                canonical: CanonicalArtifact::Ndjson(CanonicalNdjson { values }),
-                coverage: ooxml_coverage_full(),
-            };
-        }
-
         let (values, embedded_binaries) = match extract_ooxml_entries(self.limits, bytes) {
             Ok(v) => v,
             Err(reason) => {
@@ -813,14 +765,6 @@ impl Extractor for XlsxExtractor {
     }
 
     fn extract(&self, _ctx: ArtifactContext<'_>, bytes: &[u8]) -> ExtractOutcome {
-        if let Some(values) = parse_ndjson_values(bytes) {
-            return ExtractOutcome::Extracted {
-                extractor_id: self.id(),
-                canonical: CanonicalArtifact::Ndjson(CanonicalNdjson { values }),
-                coverage: ooxml_coverage_full(),
-            };
-        }
-
         let (values, embedded_binaries) = match extract_ooxml_entries(self.limits, bytes) {
             Ok(v) => v,
             Err(reason) => {
@@ -841,23 +785,6 @@ impl Extractor for XlsxExtractor {
             },
         }
     }
-}
-
-fn parse_ndjson_values(bytes: &[u8]) -> Option<Vec<serde_json::Value>> {
-    let text = std::str::from_utf8(bytes).ok()?;
-
-    let mut values = Vec::<serde_json::Value>::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let mut v: serde_json::Value = serde_json::from_str(line).ok()?;
-        canonicalize_json_value(&mut v);
-        values.push(v);
-    }
-
-    Some(values)
 }
 
 fn classify_attachment_archive(

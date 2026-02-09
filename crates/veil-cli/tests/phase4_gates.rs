@@ -824,3 +824,37 @@ fn eml_zip_attachment_is_scanned_and_sanitized() {
     assert!(!sanitized.contains("SECRET"));
     assert!(sanitized.contains("{{PII.Test}}"));
 }
+
+#[test]
+fn zip_extension_with_ndjson_payload_quarantines_parse_error() {
+    let input = TestDir::new("zip_mislabeled_ndjson_input");
+    let fake_zip_bytes = br#"{"record":"not-a-zip"}"#;
+    std::fs::write(input.join("a.zip"), fake_zip_bytes).expect("write a.zip");
+
+    let policy = TestDir::new("zip_mislabeled_ndjson_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("zip_mislabeled_ndjson_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.zip").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "PARSE_ERROR");
+}

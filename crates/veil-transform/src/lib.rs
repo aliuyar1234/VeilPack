@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
+use veil_detect::{csv_selected_columns, find_luhn_candidate_spans, json_pointer_selection};
 use veil_domain::QuarantineReasonCode;
 use veil_extract::{CanonicalArtifact, CanonicalCsv};
 use veil_policy::{Action, CompiledDetector, FieldSelectorKind, Policy, PolicyClass};
@@ -32,7 +33,7 @@ impl Transformer for TransformerV1 {
 }
 
 fn transform_csv(policy: &Policy, c: &CanonicalCsv) -> TransformOutcome {
-    let selected_cols_by_class = build_csv_selection(policy, c);
+    let selected_cols_by_class = csv_selected_columns(policy, c);
 
     let mut headers = c.headers.clone();
     for (col_idx, header) in headers.iter_mut().enumerate() {
@@ -100,7 +101,7 @@ fn transform_csv(policy: &Policy, c: &CanonicalCsv) -> TransformOutcome {
 }
 
 fn transform_json(policy: &Policy, value: &Value) -> TransformOutcome {
-    let selected_by_class = build_json_selection(policy);
+    let selected_by_class = json_pointer_selection(policy);
     let mut pointer = String::new();
 
     let mut out_value = value.clone();
@@ -121,7 +122,7 @@ fn transform_json(policy: &Policy, value: &Value) -> TransformOutcome {
 }
 
 fn transform_ndjson(policy: &Policy, values: &[Value]) -> TransformOutcome {
-    let selected_by_class = build_json_selection(policy);
+    let selected_by_class = json_pointer_selection(policy);
 
     let mut out = String::new();
     for v in values.iter() {
@@ -195,50 +196,6 @@ fn class_applies(selector: Option<StructuredSelector<'_>>, class: &PolicyClass) 
         }
         _ => true,
     }
-}
-
-fn build_csv_selection(policy: &Policy, c: &CanonicalCsv) -> BTreeMap<String, Vec<u32>> {
-    let mut by_class = BTreeMap::<String, Vec<u32>>::new();
-
-    for class in policy.classes.iter() {
-        let Some(sel) = &class.field_selector else {
-            continue;
-        };
-        if sel.kind != FieldSelectorKind::CsvHeader {
-            continue;
-        }
-
-        let mut cols = Vec::<u32>::new();
-        for field in sel.fields.iter() {
-            for (idx, header) in c.headers.iter().enumerate() {
-                if header == field {
-                    cols.push(idx as u32);
-                }
-            }
-        }
-        cols.sort();
-        cols.dedup();
-        by_class.insert(class.class_id.clone(), cols);
-    }
-
-    by_class
-}
-
-fn build_json_selection(policy: &Policy) -> BTreeMap<String, BTreeSet<String>> {
-    let mut by_class = BTreeMap::<String, BTreeSet<String>>::new();
-
-    for class in policy.classes.iter() {
-        let Some(sel) = &class.field_selector else {
-            continue;
-        };
-        if sel.kind != FieldSelectorKind::JsonPointer {
-            continue;
-        }
-        let set = sel.fields.iter().cloned().collect::<BTreeSet<_>>();
-        by_class.insert(class.class_id.clone(), set);
-    }
-
-    by_class
 }
 
 fn transform_json_value(
@@ -337,7 +294,7 @@ fn collect_match_spans(class: &PolicyClass, s: &str) -> Vec<(usize, usize)> {
                     spans.push((m.start(), m.end()));
                 }
             }
-            CompiledDetector::ChecksumLuhn => spans.extend(find_luhn_matches(s)),
+            CompiledDetector::ChecksumLuhn => spans.extend(find_luhn_candidate_spans(s)),
         }
     }
 
@@ -398,65 +355,6 @@ fn mask_keep_last(s: &str, keep_last: usize) -> String {
         out.push(*ch);
     }
     out
-}
-
-fn find_luhn_matches(s: &str) -> Vec<(usize, usize)> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::<(usize, usize)>::new();
-
-    let mut span_start = None::<usize>;
-    for (i, b) in bytes.iter().copied().enumerate() {
-        let is_candidate = b.is_ascii_digit() || b == b' ' || b == b'-';
-        if is_candidate {
-            if span_start.is_none() {
-                span_start = Some(i);
-            }
-            continue;
-        }
-
-        if let Some(start) = span_start.take() {
-            let end = i;
-            maybe_push_luhn(s, start, end, &mut out);
-        }
-    }
-
-    if let Some(start) = span_start {
-        maybe_push_luhn(s, start, bytes.len(), &mut out);
-    }
-
-    out
-}
-
-fn maybe_push_luhn(s: &str, start: usize, end: usize, out: &mut Vec<(usize, usize)>) {
-    let raw = &s[start..end];
-    let digits = raw
-        .bytes()
-        .filter(|b| b.is_ascii_digit())
-        .collect::<Vec<_>>();
-    if digits.len() < 13 || digits.len() > 19 {
-        return;
-    }
-    if !luhn_ok(&digits) {
-        return;
-    }
-    out.push((start, end));
-}
-
-fn luhn_ok(digits: &[u8]) -> bool {
-    let mut sum = 0_u32;
-    let mut double = false;
-    for d in digits.iter().rev() {
-        let mut v = (d - b'0') as u32;
-        if double {
-            v *= 2;
-            if v > 9 {
-                v -= 9;
-            }
-        }
-        sum += v;
-        double = !double;
-    }
-    sum.is_multiple_of(10)
 }
 
 fn canonicalize_json_value(v: &mut Value) {

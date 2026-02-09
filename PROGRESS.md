@@ -173,9 +173,11 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Residual verification enforced in `veil run` (two-pass scan):
     - output is re-parsed and re-scanned with the same detector set
     - residual HIGH findings quarantine with reason `VERIFICATION_FAILED`
+    - container-origin sanitized outputs are reparsed as NDJSON canonical form for residual checks while preserving original artifact type in evidence metadata
   - `veil verify` implemented and re-scans VERIFIED outputs.
   - Tests:
     - `cargo test -p veil-cli --test phase1_gates` PASS (residual quarantine + verify tamper regression)
+    - `cargo test -p veil-cli --test phase4_gates docx_text_is_sanitized -- --exact` PASS (container-origin verification compatibility)
 
 ### T-0109
 - status: DONE
@@ -276,6 +278,8 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
   - Archive extractor (ZIP/TAR) enforces D-0006 limits and quarantines on violations/unsafe paths:
     - `cargo test -p veil-cli --test phase4_gates` PASS
+  - Extension-contract strict parsing for container types (no NDJSON content-sniff fallback):
+    - `cargo test -p veil-cli --test phase4_gates zip_extension_with_ndjson_payload_quarantines_parse_error -- --exact` PASS
 
 ### T-0402
 - status: DONE
@@ -295,6 +299,8 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Perf harness implemented + baseline captured:
     - `python checks/perf_harness.py --record-baseline` PASS (writes `checks/perf_baseline.json`)
     - `python checks/perf_harness.py` PASS (compares against baseline)
+  - Perf harness sampled-median hardening (anti-flake):
+    - `python checks/perf_harness.py --build` PASS (`SAMPLES 3`, median throughput comparison)
 
 ### T-0502
 - status: DONE
@@ -365,6 +371,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - status: DONE
 - evidence:
   - `cargo test -p veil-cli --test phase1_gates` PASS (residual verification quarantines; `veil verify` catches tampered VERIFIED output)
+  - `cargo test -p veil-cli --test phase4_gates docx_text_is_sanitized -- --exact` PASS (container-origin sanitized NDJSON reparse path remains VERIFIED)
 
 ### G-SEC-KEY-HANDLING
 - status: DONE
@@ -400,6 +407,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `cargo test -p veil-cli --test phase4_gates tar_max_entries_limit_quarantines_entire_archive -- --exact` PASS
   - `cargo test -p veil-cli --test phase4_gates tar_expanded_bytes_limit_quarantines_entire_archive -- --exact` PASS
   - `cargo test -p veil-cli --test phase4_gates tar_symlink_entry_quarantines_entire_archive -- --exact` PASS
+  - `cargo test -p veil-cli --test phase4_gates zip_extension_with_ndjson_payload_quarantines_parse_error -- --exact` PASS (mislabeled `.zip` payload quarantines with `PARSE_ERROR`)
   - `cargo test -p veil-cli --test limits_json` PASS (enforces `artifact.max_bytes_per_artifact` + `disk.max_workdir_bytes` bounds with `LIMIT_EXCEEDED` quarantine)
 
 ### G-REL-ATOMIC-COMMIT
@@ -415,6 +423,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
   - `python checks/perf_harness.py` PASS (no regression vs `checks/perf_baseline.json`)
   - Post D-0018 hardening: `python checks/perf_harness.py` PASS (no regression vs baseline; tolerance 0.15)
+  - Post D-0022 hardening: `python checks/perf_harness.py --build` PASS (`SAMPLES 3`; median throughput compare; no regression)
 
 ### G-OPS-RUNBOOK-COMPLETE
 - status: DONE
@@ -426,6 +435,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
   - `python checks/boundary_fitness.py` PASS
   - `cargo test -p veil-cli --test boundary_fitness` PASS
+  - Post D-0022 maintainability refactor: `python checks/boundary_fitness.py` PASS
 
 ### G-MAINT-NO-GLOBAL-STATE
 - status: DONE
@@ -475,6 +485,8 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Verify (CHK-MANIFEST-VERIFY): PASS (post D-0020 remediation hardening)
   - Regenerate: `python checks/generate_manifest.py` (post D-0021 runtime hardening)
   - Verify (CHK-MANIFEST-VERIFY): PASS (post D-0021 runtime hardening)
+  - Regenerate: `python checks/generate_manifest.py` (post D-0022 hardening and SSOT updates)
+  - Verify (CHK-MANIFEST-VERIFY): PASS (post D-0022 hardening and SSOT updates)
 
 ### CHK-FORBIDDEN-TERMS
 - status: DONE
@@ -511,6 +523,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Post codebase security audit log update: PASS (`python -c` check from CHK-EVIDENCE-POINTER-FORMAT)
   - Post D-0020 remediation: PASS (`python -c` check from CHK-EVIDENCE-POINTER-FORMAT)
   - Post D-0021 runtime hardening: PASS (`python -c` check from CHK-EVIDENCE-POINTER-FORMAT)
+  - Post D-0022 hardening: PASS (`python -c` check from CHK-EVIDENCE-POINTER-FORMAT)
 
 ### CHK-REF-INTEGRITY
 - status: DONE
@@ -527,6 +540,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Post codebase security audit log update: PASS (manual review: evidence pointers resolve; referenced IDs exist)
   - Post D-0020 remediation: PASS (`python -c` evidence pointer resolution check)
   - Post D-0021 runtime hardening: PASS (`python -c` evidence pointer resolution check)
+  - Post D-0022 hardening: PASS (`python -c` evidence pointer resolution + ID existence check)
 
 ### CHK-NO-ADHOC-FILES
 - status: DONE
@@ -542,6 +556,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Post codebase security audit log update: PASS (`git ls-files --others --exclude-standard` is empty)
   - Post D-0020 remediation: PASS (`git ls-files --others --exclude-standard` is empty)
   - Post D-0021 runtime hardening: PASS (top-level allowlist check; ephemeral build outputs excluded)
+  - Post D-0022 hardening: PASS (top-level allowlist check; `git ls-files --others --exclude-standard` contains only expected new module files `crates/veil-cli/src/run_command.rs` and `crates/veil-cli/src/verify_command.rs`)
 
 ### CHK-QAC-COVERAGE
 - status: DONE
@@ -554,6 +569,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - `python checks/boundary_fitness.py` PASS (automated)
   - `cargo test --workspace` PASS (includes boundary fitness test)
   - Post D-0021 runtime hardening: `python checks/boundary_fitness.py` PASS
+  - Post D-0022 maintainability hardening: `python checks/boundary_fitness.py` PASS
 
 ### CHK-OFFLINE-ENFORCEMENT
 - status: DONE
@@ -563,6 +579,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
   - Static scan scope widened to `crates/**/*.rs` (includes `build.rs`) to reduce blind spots.
   - CI workflow includes both static and runtime offline enforcement commands.
   - Post D-0021 runtime hardening: `python checks/offline_enforcement.py` PASS
+  - Post D-0022 hardening: `python checks/offline_enforcement.py` PASS
 
 ### CHK-NO-PLAINTEXT-LEAKS
 - status: DONE
@@ -579,12 +596,14 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - evidence:
   - `cargo test -p veil-cli --tests` PASS
   - Post D-0021 runtime hardening: `cargo test -p veil-cli --tests` PASS
+  - Post D-0022 hardening: `cargo test --workspace` PASS (includes all `veil-cli` negative-path suites)
 
 ### CHK-CONTRACT-CONSISTENCY
 - status: DONE
 - evidence:
   - `cargo test -p veil-cli --test contract_consistency` PASS
   - Post D-0021 runtime hardening: `cargo test -p veil-cli --test contract_consistency` PASS
+  - Post D-0022 hardening: `cargo test --workspace` PASS (includes `contract_consistency`)
 
 ### CHK-FAIL-CLOSED-INVARIANTS
 - status: DONE
@@ -668,6 +687,7 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
     - evidence: DECISIONS.md :: ## D-0017 — Container format canonicalization to NDJSON (v1)
     - evidence: DECISIONS.md :: ## D-0018 — Hardening baseline: per-artifact memory bounds, identity revalidation, and unsafe output-path refusal
     - evidence: DECISIONS.md :: ## D-0020 - Remediation hardening pass: structured logs, resume metadata binding, and path/write safety tightening
+    - evidence: DECISIONS.md :: ## D-0022 - Maintainability and strict container-parsing hardening pass
 
 
 ## Session History
@@ -685,3 +705,5 @@ Statuses: TODO / IN_PROGRESS / DONE / BLOCKED (BLOCKED only if blocking=YES ques
 - 2026-02-05: Implementation architecture audit completed (robustness/usability review; no code changes).
 - 2026-02-05: Codebase security audit completed (crates/checks review; report-only, no code changes).
 - 2026-02-05: D-0020 remediation hardening completed (structured JSON logs, resume metadata binding, unsafe path/write tightening, archive observed-byte limits, expanded tests, and CI gate coverage).
+- 2026-02-05: D-0021 runtime hardening completed (verify completeness checks, usage redaction, workdir disk bounds, and atomic persistence hardening).
+- 2026-02-09: D-0022 hardening completed (CLI module split, detect/transform helper consolidation, strict container parsing, container NDJSON verification mapping, and sampled-median perf gating).

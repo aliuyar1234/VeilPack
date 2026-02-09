@@ -1256,3 +1256,89 @@ evidence: spec/11_QUALITY_GATES.md :: G-REL-ATOMIC-COMMIT
 ### Fail-closed baseline behavior
 - Unsafe verify-evidence paths or malformed verified-output topology: verification fails closed.
 - Workdir bound violations: per-artifact quarantine (`LIMIT_EXCEEDED`) or run abort if preflight state is already unsafe.
+
+---
+
+## D-0022 - Maintainability and strict container-parsing hardening pass
+
+### Decision statement
+- Refactor CLI orchestration into focused modules without changing public CLI behavior:
+  - `crates/veil-cli/src/run_command.rs` owns `veil run` orchestration.
+  - `crates/veil-cli/src/verify_command.rs` owns `veil verify` orchestration.
+  - `crates/veil-cli/src/main.rs` remains command routing plus shared utilities.
+- Remove duplicated detector/transform helper logic:
+  - `crates/veil-detect` now exposes shared helpers for CSV header selection, JSON pointer selection, and Luhn candidate span detection.
+  - `crates/veil-transform` consumes these helpers directly; duplicated local implementations are removed.
+- Tighten container parsing contract (fail-closed):
+  - Container extractors (`ZIP`, `TAR`, `EML`, `MBOX`, `DOCX`, `PPTX`, `XLSX`) MUST parse bytes according to declared type and MUST NOT content-sniff/fallback to NDJSON.
+  - Mislabeled bytes under container extensions quarantine with `PARSE_ERROR`.
+- Preserve residual verification semantics for container-origin outputs:
+  - Container-origin sanitized outputs remain NDJSON bytes.
+  - Post-transform residual verification (`veil run`) and `veil verify` re-parse these outputs as NDJSON canonical artifacts, while evidence continues to record original artifact type.
+- Harden perf regression checks against single-run noise:
+  - `checks/perf_harness.py` now collects multiple samples (default `--samples 3`) and compares median throughput.
+  - Baseline compatibility is preserved for legacy single-throughput baselines.
+
+### Rationale
+- Reduces `veil-cli` maintenance risk from a growing monolithic file while preserving behavior.
+- Removes copy-paste drift risk between detection and transformation matching logic.
+- Enforces strict extension-contract parsing for container handlers to avoid false-positive "successful parse" on mislabeled inputs.
+- Keeps container verification fail-closed while maintaining canonical NDJSON output contracts.
+- Reduces flakiness in performance gating caused by one-off runtime variance.
+
+### Alternatives considered
+- Keep all CLI command flows in `main.rs`:
+  - rejected: increases maintenance and review risk for critical-flow changes.
+- Keep duplicated helper logic in detect/transform:
+  - rejected: creates semantic drift risk for matching behavior.
+- Keep container NDJSON content-sniff fallback:
+  - rejected: violates strict format contract and can hide mislabeled input errors.
+- Compare perf using one sample:
+  - rejected: too noisy for regression gating.
+
+### Implications (what it affects)
+- Module boundaries inside `veil-cli` are clearer and easier to audit.
+- Detector and transform selection/matching logic stays consistent by construction.
+- Container parsing now fails closed on mislabeled payloads instead of accepting NDJSON fallback.
+- Verification flow for container-origin outputs explicitly uses NDJSON canonical reparse semantics.
+- Perf harness outputs include sample count and median-based comparison behavior.
+
+### Affected files
+- spec/02_ARCHITECTURE.md
+- spec/04_INTERFACES_AND_CONTRACTS.md
+- spec/11_QUALITY_GATES.md
+- checks/perf_harness.py
+- crates/veil-cli/src/main.rs
+- crates/veil-cli/src/run_command.rs
+- crates/veil-cli/src/verify_command.rs
+- crates/veil-detect/src/lib.rs
+- crates/veil-transform/src/lib.rs
+- crates/veil-extract/src/lib.rs
+- crates/veil-cli/tests/phase4_gates.rs
+
+### Verification impact
+- Must exist:
+  - regression test that a mislabeled `.zip` payload quarantines with `PARSE_ERROR`.
+  - regression coverage that container-origin outputs still pass residual verification and `veil verify` via NDJSON reparse mapping.
+  - boundary check after CLI module split.
+  - perf harness comparison with sampled median output.
+- Gates/checks:
+evidence: spec/11_QUALITY_GATES.md :: G-SEC-VERIFY-RESIDUAL
+evidence: spec/11_QUALITY_GATES.md :: G-REL-ARCHIVE-LIMITS
+evidence: spec/11_QUALITY_GATES.md :: G-PERF-NO-REGRESSION
+evidence: spec/11_QUALITY_GATES.md :: G-MAINT-BOUNDARY-FITNESS
+
+### DSC classification summary
+- externally constrained: NO
+- critical flow impacted: YES (container parse/verify behavior and CLI orchestration in critical path)
+- unsafe/high-risk: YES (format confusion and residual verification integrity)
+- conservative baseline available: YES (strict parse + fail-closed quarantine + median perf comparison)
+- safe to decide: YES (fully testable with integration tests and checks)
+
+### Conservative baseline
+- YES (strict extension parsing for containers; NDJSON-only verification reparse for container-origin sanitized outputs; median sampling for perf gate)
+
+### Fail-closed baseline behavior
+- Container parse ambiguity is not tolerated: extension/type mismatch quarantines with `PARSE_ERROR`.
+- If container-origin sanitized output cannot be reparsed as NDJSON during residual verification, the artifact is not VERIFIED.
+- If `veil verify` cannot parse container-origin sanitized output via NDJSON mapping, verification records a failure and exits `EXIT_QUARANTINED`.

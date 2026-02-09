@@ -90,10 +90,14 @@ evidence: PROGRESS.md :: G-SEC-QUARANTINE-NO-RAW-DEFAULT
 - Verify:
   - Integration test where transform misses a HIGH-severity match and residual verification quarantines.
   - `veil verify` reproduces the failure on the produced Veil Pack.
+  - For container-origin artifacts canonicalized to NDJSON, both `veil run` residual verification and `veil verify` must re-parse sanitized bytes as NDJSON and fail closed on parse/verification errors.
 - Pass/fail:
   - PASS if residuals are detected and block VERIFIED.
 - Evidence:
 evidence: PROGRESS.md :: G-SEC-VERIFY-RESIDUAL
+
+Related decision:
+evidence: DECISIONS.md :: ## D-0022 - Maintainability and strict container-parsing hardening pass
 
 ### G-SEC-KEY-HANDLING
 - Why: tokenization and proof digests introduce linkage risk and secret handling.
@@ -137,6 +141,7 @@ evidence: DECISIONS.md :: ## D-0014
 - Verify:
   - tests that trigger each archive limit and assert quarantine of the archive artifact.
   - tests that attempt path traversal and assert quarantine.
+  - tests that assert container extension handling is strict (mislabeled bytes under container extensions quarantine with `PARSE_ERROR`; no NDJSON content-sniff fallback).
   - tests that enforce `max_bytes_per_artifact` and assert over-limit artifacts are quarantined.
   - tests that enforce `disk.max_workdir_bytes` and assert over-limit artifacts are quarantined fail-closed.
   - Phase 4 archive limits suite: `cargo test -p veil-cli --test phase4_gates`
@@ -145,6 +150,9 @@ evidence: DECISIONS.md :: ## D-0014
   - PASS if all violations quarantine and no partial emission occurs.
 - Evidence:
 evidence: PROGRESS.md :: G-REL-ARCHIVE-LIMITS
+
+Related decision:
+evidence: DECISIONS.md :: ## D-0022 - Maintainability and strict container-parsing hardening pass
 
 ### G-REL-ATOMIC-COMMIT
 - Why: avoid partial sanitized outputs on crash.
@@ -166,12 +174,17 @@ evidence: DECISIONS.md :: ## D-0014
 - Verify:
   - perf harness runs on a fixed fixture corpus and records baseline metrics.
   - subsequent runs compare against baseline and require a decision + mitigation if regressed.
+  - harness comparison uses sampled median throughput (`--samples`, default `3`) to reduce flakiness.
+  - baseline compatibility supports legacy single-throughput records and sampled-baseline records.
   - Record baseline: `python checks/perf_harness.py --record-baseline`
   - Compare against baseline: `python checks/perf_harness.py`
 - Pass/fail:
   - PASS if no regression OR regression is explicitly approved by decision with mitigation and evidence.
 - Evidence:
 evidence: PROGRESS.md :: G-PERF-NO-REGRESSION
+
+Related decision:
+evidence: DECISIONS.md :: ## D-0022 - Maintainability and strict container-parsing hardening pass
 
 ---
 

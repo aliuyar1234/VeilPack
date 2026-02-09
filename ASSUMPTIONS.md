@@ -79,3 +79,11 @@ evidence: DECISIONS.md :: ## D-0020 - Remediation hardening pass: structured log
 - Outcome: no new unresolved uncertainty required assumption tracking; behavior encoded as decisions.
 - Decision:
 evidence: DECISIONS.md :: ## D-0021 - Runtime hardening pass: verify completeness checks, usage redaction, and workdir disk bounds
+
+---
+
+## Session update - no new assumptions added in D-0022 hardening pass
+- Scope: CLI module split, shared detect/transform helper consolidation, strict container extension parsing, container NDJSON verification mapping, and perf harness median sampling.
+- Outcome: no new unresolved uncertainty required assumption tracking; behavior encoded as decisions.
+- Decision:
+evidence: DECISIONS.md :: ## D-0022 - Maintainability and strict container-parsing hardening pass

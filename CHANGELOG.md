@@ -95,3 +95,15 @@
 - Redacted usage parsing errors to avoid echoing unknown/unexpected argument values to stderr logs.
 - Hardened atomic persistence with file+directory fsync and added a safe fallback path for cross-filesystem staging rename failures.
 - Expanded tests for workdir bound enforcement, verify completeness/path safety, resume-finalized refusal, usage redaction, and contract assertions for tokenization + `ledger_schema_version`.
+
+### Maintainability and strict container-parsing hardening pass (D-0022)
+- Split `veil-cli` orchestration into dedicated command modules:
+  - `crates/veil-cli/src/run_command.rs` (`veil run`)
+  - `crates/veil-cli/src/verify_command.rs` (`veil verify`)
+  - `crates/veil-cli/src/main.rs` retained as routing/shared utility layer.
+- Removed duplicated detect/transform helper logic by exporting shared helpers from `crates/veil-detect` and consuming them from `crates/veil-transform`.
+- Removed container extractor NDJSON content-sniff fallback in `crates/veil-extract`; container extensions now require strict container parse and quarantine mislabeled payloads with `PARSE_ERROR`.
+- Preserved residual verification and `veil verify` behavior for container-origin sanitized outputs by re-parsing those outputs as NDJSON canonical artifacts during verification paths.
+- Hardened perf gate stability by changing `checks/perf_harness.py` to sampled-median comparison (`--samples`, default `3`) with legacy baseline compatibility.
+- Added Phase 4 regression test:
+  - `zip_extension_with_ndjson_payload_quarantines_parse_error` in `crates/veil-cli/tests/phase4_gates.rs`.

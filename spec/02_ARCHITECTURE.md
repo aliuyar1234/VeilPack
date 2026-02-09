@@ -83,11 +83,21 @@ The C-101 layers are implemented as a Rust workspace with one crate per layer:
 - evidence: `crates/veil-evidence`
 - cli: `crates/veil-cli` (binary name: `veil`)
 
+CLI orchestration module split (maintainability hardening):
+- `crates/veil-cli/src/main.rs`: command routing + shared helpers
+- `crates/veil-cli/src/run_command.rs`: `veil run` orchestration
+- `crates/veil-cli/src/verify_command.rs`: `veil verify` orchestration
+
+Shared detector/transform helper consolidation:
+- `crates/veil-detect` exposes reusable field-selection and Luhn-span helpers consumed by both detect and transform paths.
+- Dependency direction remains unchanged (transform depends on detect; no upward dependency introduction).
+
 Boundary check (automated):
 - `python checks/boundary_fitness.py`
 
 Decision:
 evidence: DECISIONS.md :: ## D-0009
+evidence: DECISIONS.md :: ## D-0022 - Maintainability and strict container-parsing hardening pass
 
 ## Extractor Contract and Coverage Map (conceptual contract)
 - Input: artifact bytes + artifact context (artifact_id, policy_id, limits)
@@ -114,6 +124,8 @@ evidence: DECISIONS.md :: D-0002
   - EML (`.eml`)
   - MBOX (`.mbox`)
   - Office Open XML: DOCX/PPTX/XLSX (`.docx`/`.pptx`/`.xlsx`)
+  - Container extraction is extension-contract strict; mislabeled NDJSON/plaintext bytes under container extensions are quarantined (no content-sniffing fallback).
+  - Post-transform residual verification for container-origin artifacts re-parses emitted sanitized bytes as NDJSON canonical form while preserving original artifact identity in evidence.
 
 Container canonicalization decision:
 evidence: DECISIONS.md :: ## D-0017 — Container format canonicalization to NDJSON (v1)

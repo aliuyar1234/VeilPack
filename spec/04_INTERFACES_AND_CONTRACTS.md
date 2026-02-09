@@ -58,6 +58,7 @@ evidence: DECISIONS.md :: ## D-0021 - Runtime hardening pass: verify completenes
   - `--policy <PATH>`: policy bundle directory
 - Behavior:
   - re-scan VERIFIED outputs and fail if residual HIGH-severity findings exist
+  - for container-origin artifact types (`ZIP`/`TAR`/`EML`/`MBOX`/`DOCX`/`PPTX`/`XLSX`), re-parse sanitized bytes using NDJSON canonical verification mapping while preserving original artifact type metadata in evidence
   - refuse unsafe sanitized output paths (symlink/reparse/non-file) during verification and count them as verification failures (fail-closed)
   - refuse unsafe `pack_manifest.json` / `evidence/artifacts.ndjson` paths (symlink/reparse/non-file) before reading
   - fail closed if `sanitized/` contains files that are not represented as VERIFIED in `evidence/artifacts.ndjson`
@@ -145,6 +146,11 @@ Supported container formats (canonicalized to NDJSON; sanitized output ext `ndjs
 - TAR: `.tar`
 - Email: `.eml`, `.mbox`
 - Office Open XML: `.docx`, `.pptx`, `.xlsx`
+- Container parsing is extension-contract strict:
+  - bytes for these extensions MUST parse as the declared container format.
+  - NDJSON/plaintext content-sniff fallback is not allowed for these container types.
+  - parse failures quarantine with reason code `PARSE_ERROR`.
+- Post-transform residual verification and `veil verify` re-parse container-origin sanitized bytes as NDJSON canonical form.
 
 Email attachment baseline (fail-closed):
 - ZIP/TAR attachments are supported (by mimetype or filename).
@@ -153,6 +159,7 @@ Email attachment baseline (fail-closed):
 
 Decision:
 evidence: DECISIONS.md :: ## D-0017 — Container format canonicalization to NDJSON (v1)
+evidence: DECISIONS.md :: ## D-0022 - Maintainability and strict container-parsing hardening pass
 
 ## Policy Bundle Schema v1
 A policy bundle is a directory containing `policy.json` (required). `policy.json` is UTF-8 JSON.

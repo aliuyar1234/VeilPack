@@ -1,6 +1,9 @@
 use core::fmt;
 use std::collections::BTreeMap;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
+use std::process::{ChildStdout, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use veil_domain::{
     ArchiveLimits, ArtifactId, CoverageMapV1, CoverageStatus, QuarantineReasonCode,
@@ -106,6 +109,28 @@ pub trait Extractor {
     fn extract(&self, ctx: ArtifactContext<'_>, bytes: &[u8]) -> ExtractOutcome;
 }
 
+const PDF_OCR_DEFAULT_TIMEOUT_MS: u64 = 30_000;
+const PDF_OCR_DEFAULT_MAX_OUTPUT_BYTES: u64 = 1_048_576;
+
+#[derive(Debug, Clone)]
+pub struct PdfOcrOptions {
+    pub enabled: bool,
+    pub command: Vec<String>,
+    pub timeout_ms: u64,
+    pub max_output_bytes: u64,
+}
+
+impl Default for PdfOcrOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: Vec::new(),
+            timeout_ms: PDF_OCR_DEFAULT_TIMEOUT_MS,
+            max_output_bytes: PDF_OCR_DEFAULT_MAX_OUTPUT_BYTES,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ExtractorRegistry {
     text: TextExtractor,
@@ -125,6 +150,10 @@ pub struct ExtractorRegistry {
 
 impl ExtractorRegistry {
     pub fn new(limits: ArchiveLimits) -> Self {
+        Self::with_pdf_options(limits, PdfOcrOptions::default())
+    }
+
+    pub fn with_pdf_options(limits: ArchiveLimits, pdf_ocr: PdfOcrOptions) -> Self {
         Self {
             text: TextExtractor,
             csv: CsvExtractor,
@@ -138,7 +167,10 @@ impl ExtractorRegistry {
             docx: DocxExtractor { limits },
             pptx: PptxExtractor { limits },
             xlsx: XlsxExtractor { limits },
-            pdf: PdfExtractor { limits },
+            pdf: PdfExtractor {
+                limits,
+                ocr: pdf_ocr,
+            },
         }
     }
 
@@ -801,9 +833,10 @@ impl Extractor for XlsxExtractor {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PdfExtractor {
     limits: ArchiveLimits,
+    ocr: PdfOcrOptions,
 }
 
 impl Extractor for PdfExtractor {
@@ -844,6 +877,13 @@ impl Extractor for PdfExtractor {
             };
         }
 
+        if let Err(reason) = ensure_pdf_supported_surfaces(&document, &pages) {
+            return ExtractOutcome::Quarantined {
+                extractor_id: Some(self.id()),
+                reason,
+            };
+        }
+
         let mut values = Vec::<serde_json::Value>::new();
         let mut pages_requiring_ocr = 0_u32;
         for (seq, (page_number, page_id)) in pages.iter().enumerate() {
@@ -871,7 +911,39 @@ impl Extractor for PdfExtractor {
             let text = sanitize_pdf_text(&page_text);
             if text.trim().is_empty() {
                 if has_page_ops {
-                    pages_requiring_ocr = pages_requiring_ocr.saturating_add(1);
+                    if !self.ocr.enabled {
+                        pages_requiring_ocr = pages_requiring_ocr.saturating_add(1);
+                        continue;
+                    }
+
+                    let ocr_text = match run_pdf_ocr_command(
+                        &self.ocr,
+                        _ctx,
+                        bytes,
+                        page_number.saturating_sub(1),
+                        *page_number,
+                    ) {
+                        Ok(t) => t,
+                        Err(reason) => {
+                            return ExtractOutcome::Quarantined {
+                                extractor_id: Some(self.id()),
+                                reason,
+                            };
+                        }
+                    };
+                    let ocr_text = sanitize_pdf_text(&ocr_text);
+                    if ocr_text.trim().is_empty() {
+                        return ExtractOutcome::Quarantined {
+                            extractor_id: Some(self.id()),
+                            reason: QuarantineReasonCode::PdfOcrFailed,
+                        };
+                    }
+                    values.push(make_pdf_text_record(
+                        page_number.saturating_sub(1),
+                        seq as u32,
+                        "ocr",
+                        &ocr_text,
+                    ));
                 }
                 continue;
             }
@@ -879,6 +951,7 @@ impl Extractor for PdfExtractor {
             values.push(make_pdf_text_record(
                 page_number.saturating_sub(1),
                 seq as u32,
+                "text_layer",
                 &text,
             ));
         }
@@ -913,7 +986,7 @@ fn sanitize_pdf_text(text: &str) -> String {
     out
 }
 
-fn make_pdf_text_record(page_index: u32, seq: u32, text: &str) -> serde_json::Value {
+fn make_pdf_text_record(page_index: u32, seq: u32, surface: &str, text: &str) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     map.insert(
         "schema_version".to_string(),
@@ -925,7 +998,7 @@ fn make_pdf_text_record(page_index: u32, seq: u32, text: &str) -> serde_json::Va
     );
     map.insert(
         "surface".to_string(),
-        serde_json::Value::String("text_layer".to_string()),
+        serde_json::Value::String(surface.to_string()),
     );
     map.insert(
         "seq".to_string(),
@@ -936,6 +1009,188 @@ fn make_pdf_text_record(page_index: u32, seq: u32, text: &str) -> serde_json::Va
         serde_json::Value::String(text.to_string()),
     );
     serde_json::Value::Object(map)
+}
+
+fn ensure_pdf_supported_surfaces(
+    document: &lopdf::Document,
+    pages: &BTreeMap<u32, lopdf::ObjectId>,
+) -> Result<(), QuarantineReasonCode> {
+    let root_obj = document
+        .trailer
+        .get(b"Root")
+        .and_then(|obj| document.dereference(obj))
+        .map_err(|_| QuarantineReasonCode::PdfParseError)?
+        .1;
+    let root = root_obj
+        .as_dict()
+        .map_err(|_| QuarantineReasonCode::PdfParseError)?;
+
+    if root.has(b"OpenAction") || root.has(b"AA") {
+        return Err(QuarantineReasonCode::PdfActionsPresentUnsupported);
+    }
+
+    if let Ok(acro_form_obj) = root.get_deref(b"AcroForm", document) {
+        let acro_form = acro_form_obj
+            .as_dict()
+            .map_err(|_| QuarantineReasonCode::PdfParseError)?;
+        if acro_form.has(b"XFA") {
+            return Err(QuarantineReasonCode::PdfXfaUnsupported);
+        }
+        if acro_form.has(b"AA") {
+            return Err(QuarantineReasonCode::PdfActionsPresentUnsupported);
+        }
+    }
+
+    if let Ok(names_obj) = root.get_deref(b"Names", document) {
+        let names = names_obj
+            .as_dict()
+            .map_err(|_| QuarantineReasonCode::PdfParseError)?;
+        if names.has(b"JavaScript") {
+            return Err(QuarantineReasonCode::PdfActionsPresentUnsupported);
+        }
+        if names.has(b"EmbeddedFiles") {
+            return Err(QuarantineReasonCode::PdfEmbeddedFileExtractionFailed);
+        }
+    }
+
+    for page_id in pages.values() {
+        let page = document
+            .get_object(*page_id)
+            .and_then(lopdf::Object::as_dict)
+            .map_err(|_| QuarantineReasonCode::PdfParseError)?;
+
+        if page.has(b"AA") {
+            return Err(QuarantineReasonCode::PdfActionsPresentUnsupported);
+        }
+
+        if let Ok(annots_obj) = page.get_deref(b"Annots", document) {
+            let annots = annots_obj
+                .as_array()
+                .map_err(|_| QuarantineReasonCode::PdfParseError)?;
+            for annot in annots {
+                let annot_obj = document
+                    .dereference(annot)
+                    .map_err(|_| QuarantineReasonCode::PdfParseError)?
+                    .1;
+                let annot_dict = annot_obj
+                    .as_dict()
+                    .map_err(|_| QuarantineReasonCode::PdfParseError)?;
+                if annot_dict.has(b"A") || annot_dict.has(b"AA") {
+                    return Err(QuarantineReasonCode::PdfActionsPresentUnsupported);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn run_pdf_ocr_command(
+    options: &PdfOcrOptions,
+    ctx: ArtifactContext<'_>,
+    pdf_bytes: &[u8],
+    page_index: u32,
+    page_number: u32,
+) -> Result<String, QuarantineReasonCode> {
+    if options.command.is_empty() {
+        return Err(QuarantineReasonCode::PdfOcrFailed);
+    }
+
+    let mut command = Command::new(&options.command[0]);
+    command
+        .args(&options.command[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env("VEIL_PDF_OCR_PAGE_INDEX", page_index.to_string())
+        .env("VEIL_PDF_OCR_PAGE_NUMBER", page_number.to_string())
+        .env("VEIL_ARTIFACT_ID", ctx.artifact_id.to_string())
+        .env(
+            "VEIL_SOURCE_LOCATOR_HASH",
+            ctx.source_locator_hash.to_string(),
+        );
+
+    let mut child = command
+        .spawn()
+        .map_err(|_| QuarantineReasonCode::PdfOcrFailed)?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(QuarantineReasonCode::PdfOcrFailed)?;
+    let max_output_bytes = options.max_output_bytes;
+    let stdout_reader = thread::spawn(move || read_pdf_ocr_stdout(stdout, max_output_bytes));
+
+    if let Some(mut stdin) = child.stdin.take() {
+        if stdin.write_all(pdf_bytes).is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            return Err(QuarantineReasonCode::PdfOcrFailed);
+        }
+    } else {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = stdout_reader.join();
+        return Err(QuarantineReasonCode::PdfOcrFailed);
+    }
+
+    let timeout = Duration::from_millis(options.timeout_ms);
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_reader.join();
+                    return Err(QuarantineReasonCode::PdfOcrFailed);
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                return Err(QuarantineReasonCode::PdfOcrFailed);
+            }
+        }
+    };
+
+    let (stdout, overflow) = stdout_reader
+        .join()
+        .map_err(|_| QuarantineReasonCode::PdfOcrFailed)?
+        .map_err(|_| QuarantineReasonCode::PdfOcrFailed)?;
+    if overflow || !status.success() {
+        return Err(QuarantineReasonCode::PdfOcrFailed);
+    }
+
+    String::from_utf8(stdout).map_err(|_| QuarantineReasonCode::PdfOcrFailed)
+}
+
+fn read_pdf_ocr_stdout(stdout: ChildStdout, max_output_bytes: u64) -> Result<(Vec<u8>, bool), ()> {
+    let max_bytes = usize::try_from(max_output_bytes).map_err(|_| ())?;
+    let mut reader = stdout;
+    let mut out = Vec::<u8>::new();
+    let mut overflow = false;
+    let mut buf = [0_u8; 8192];
+    loop {
+        let n = reader.read(&mut buf).map_err(|_| ())?;
+        if n == 0 {
+            break;
+        }
+        if out.len() < max_bytes {
+            let remaining = max_bytes.saturating_sub(out.len());
+            let copy_len = remaining.min(n);
+            out.extend_from_slice(&buf[..copy_len]);
+            if copy_len < n {
+                overflow = true;
+            }
+        } else {
+            overflow = true;
+        }
+    }
+    Ok((out, overflow))
 }
 
 fn classify_attachment_archive(

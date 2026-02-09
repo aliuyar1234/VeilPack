@@ -694,6 +694,8 @@ struct LimitsFileV1 {
     artifact: ArtifactLimitsOverride,
     #[serde(default)]
     disk: DiskLimitsOverride,
+    #[serde(default)]
+    pdf: PdfLimitsOverride,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -718,10 +720,27 @@ struct DiskLimitsOverride {
     max_workdir_bytes: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PdfLimitsOverride {
+    #[serde(default)]
+    ocr: PdfOcrLimitsOverride,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PdfOcrLimitsOverride {
+    enabled: Option<bool>,
+    command: Option<Vec<String>>,
+    timeout_ms: Option<u64>,
+    max_output_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
 struct RuntimeLimits {
     archive_limits: veil_domain::ArchiveLimits,
     max_workdir_bytes: u64,
+    pdf_ocr: veil_extract::PdfOcrOptions,
 }
 
 impl Default for RuntimeLimits {
@@ -729,6 +748,7 @@ impl Default for RuntimeLimits {
         Self {
             archive_limits: veil_domain::ArchiveLimits::default(),
             max_workdir_bytes: DEFAULT_MAX_WORKDIR_BYTES,
+            pdf_ocr: veil_extract::PdfOcrOptions::default(),
         }
     }
 }
@@ -746,6 +766,7 @@ fn load_runtime_limits_from_json(path: &Path) -> Result<RuntimeLimits, String> {
 
     let mut archive_limits = veil_domain::ArchiveLimits::default();
     let mut max_workdir_bytes = DEFAULT_MAX_WORKDIR_BYTES;
+    let mut pdf_ocr = veil_extract::PdfOcrOptions::default();
     if let Some(v) = parsed.archive.max_nested_archive_depth {
         archive_limits.max_nested_archive_depth = v;
     }
@@ -782,10 +803,42 @@ fn load_runtime_limits_from_json(path: &Path) -> Result<RuntimeLimits, String> {
         }
         max_workdir_bytes = v;
     }
+    if let Some(enabled) = parsed.pdf.ocr.enabled {
+        pdf_ocr.enabled = enabled;
+    }
+    if let Some(command) = parsed.pdf.ocr.command {
+        if command.is_empty() {
+            return Err(
+                "limits-json pdf.ocr.command must contain at least one element".to_string(),
+            );
+        }
+        if command.iter().any(|arg| arg.trim().is_empty()) {
+            return Err("limits-json pdf.ocr.command must not contain empty elements".to_string());
+        }
+        pdf_ocr.command = command;
+    }
+    if let Some(v) = parsed.pdf.ocr.timeout_ms {
+        if v == 0 {
+            return Err("limits-json pdf.ocr.timeout_ms must be >= 1".to_string());
+        }
+        pdf_ocr.timeout_ms = v;
+    }
+    if let Some(v) = parsed.pdf.ocr.max_output_bytes {
+        if v == 0 {
+            return Err("limits-json pdf.ocr.max_output_bytes must be >= 1".to_string());
+        }
+        pdf_ocr.max_output_bytes = v;
+    }
+    if pdf_ocr.enabled && pdf_ocr.command.is_empty() {
+        return Err(
+            "limits-json pdf.ocr.command is required when pdf.ocr.enabled is true".to_string(),
+        );
+    }
 
     Ok(RuntimeLimits {
         archive_limits,
         max_workdir_bytes,
+        pdf_ocr,
     })
 }
 
@@ -1560,6 +1613,7 @@ fn print_run_help(exe: &str) {
     println!("  --secret-key-file <PATH>       Required if tokenization is enabled");
     println!("  --quarantine-copy true|false    Default: false");
     println!("  --limits-json <PATH>            Optional JSON file overriding safety limits");
+    println!("                                  (includes pdf.ocr.* runtime knobs)");
 }
 
 fn print_verify_help(exe: &str) {

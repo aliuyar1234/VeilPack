@@ -23,6 +23,7 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         None => RuntimeLimits::default(),
     };
     let archive_limits = runtime_limits.archive_limits;
+    let pdf_ocr_limits = runtime_limits.pdf_ocr.clone();
 
     let policy = match veil_policy::load_policy_bundle(&parsed.policy) {
         Ok(p) => p,
@@ -405,7 +406,8 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         return ExitCode::from(EXIT_FATAL);
     }
 
-    let extractors = veil_extract::ExtractorRegistry::new(archive_limits);
+    let extractors =
+        veil_extract::ExtractorRegistry::with_pdf_options(archive_limits, pdf_ocr_limits);
     let detector = veil_detect::DetectorEngineV1;
     let transformer = veil_transform::TransformerV1;
 

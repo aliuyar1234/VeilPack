@@ -94,7 +94,7 @@ flowchart LR
 | Group | Types |
 |---|---|
 | Text and structured | `.txt`, `.csv`, `.tsv`, `.json`, `.ndjson` |
-| PDF | `.pdf` (text-layer extraction to canonical NDJSON; image-only pages use optional local OCR via `limits.v1` `pdf.ocr.*`; fail-closed quarantine when OCR is required but unavailable/failing) |
+| PDF | `.pdf` (default output: canonical NDJSON; optional `safe_pdf` output mode; image-only pages use optional local OCR via `limits.v1` `pdf.ocr.*`; fail-closed quarantine when OCR is required but unavailable/failing) |
 | Container and compound | `.zip`, `.tar`, `.eml`, `.mbox`, `.docx`, `.pptx`, `.xlsx` |
 
 Notes:
@@ -234,6 +234,12 @@ OCR remains strictly local and opt-in. Configure it via `--limits-json`:
 {
   "schema_version": "limits.v1",
   "pdf": {
+    "output_mode": "derived_ndjson",
+    "worker": {
+      "enabled": true,
+      "timeout_ms": 60000,
+      "max_output_bytes": 67108864
+    },
     "ocr": {
       "enabled": true,
       "command": ["python", "tools/pdf_ocr_worker.py"],
@@ -243,6 +249,10 @@ OCR remains strictly local and opt-in. Configure it via `--limits-json`:
   }
 }
 ```
+
+PDF mode values:
+- `pdf.output_mode = "derived_ndjson"` (default): sanitized artifact remains NDJSON.
+- `pdf.output_mode = "safe_pdf"`: Veil emits a deterministic, structurally minimal sanitized PDF.
 
 Runtime OCR command contract:
 - `stdin`: raw PDF bytes

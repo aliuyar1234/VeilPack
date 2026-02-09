@@ -69,6 +69,77 @@ fn quarantine_index_text(pack_root: &Path) -> String {
         .expect("read quarantine index")
 }
 
+fn build_pdf_with_page_count(page_count: u32) -> Vec<u8> {
+    assert!(page_count >= 1);
+
+    let mut out = String::new();
+    out.push_str("%PDF-1.4\n");
+
+    let page_obj_start = 3_u32;
+    let content_obj_start = page_obj_start + page_count;
+    let font_obj_id = content_obj_start + page_count;
+
+    let mut objects = Vec::<String>::new();
+    objects.push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_string());
+
+    let mut kids = String::new();
+    for i in 0..page_count {
+        if i > 0 {
+            kids.push(' ');
+        }
+        kids.push_str(&(page_obj_start + i).to_string());
+        kids.push_str(" 0 R");
+    }
+    objects.push(format!(
+        "2 0 obj\n<< /Type /Pages /Kids [{}] /Count {} >>\nendobj\n",
+        kids, page_count
+    ));
+
+    for i in 0..page_count {
+        let page_obj_id = page_obj_start + i;
+        let content_obj_id = content_obj_start + i;
+        objects.push(format!(
+            "{page_obj_id} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {font_obj_id} 0 R >> >> /Contents {content_obj_id} 0 R >>\nendobj\n"
+        ));
+    }
+
+    for i in 0..page_count {
+        let content_obj_id = content_obj_start + i;
+        let content_stream = format!("BT /F1 18 Tf 72 720 Td (P{}) Tj ET", i + 1);
+        objects.push(format!(
+            "{content_obj_id} 0 obj\n<< /Length {} >>\nstream\n{}\nendstream\nendobj\n",
+            content_stream.len(),
+            content_stream
+        ));
+    }
+
+    objects.push(format!(
+        "{font_obj_id} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
+    ));
+
+    let mut offsets = Vec::<usize>::new();
+    for obj in &objects {
+        offsets.push(out.len());
+        out.push_str(obj);
+    }
+
+    let xref_offset = out.len();
+    out.push_str("xref\n");
+    out.push_str(&format!("0 {}\n", objects.len() + 1));
+    out.push_str("0000000000 65535 f \n");
+    for off in offsets {
+        out.push_str(&format!("{off:010} 00000 n \n"));
+    }
+    out.push_str("trailer\n<< /Size ");
+    out.push_str(&(objects.len() + 1).to_string());
+    out.push_str(" /Root 1 0 R >>\n");
+    out.push_str("startxref\n");
+    out.push_str(&xref_offset.to_string());
+    out.push_str("\n%%EOF\n");
+
+    out.into_bytes()
+}
+
 #[test]
 fn run_accepts_valid_limits_json() {
     let input = TestDir::new("input_limits_ok");
@@ -256,7 +327,7 @@ fn run_rejects_limits_json_zero_values() {
     let limits_path = limits.join("limits.json");
     std::fs::write(
         &limits_path,
-        br#"{"schema_version":"limits.v1","archive":{"max_expansion_ratio":0,"max_expanded_bytes_per_archive":0},"artifact":{"max_bytes_per_artifact":0},"disk":{"max_workdir_bytes":0}}"#,
+        br#"{"schema_version":"limits.v1","archive":{"max_expansion_ratio":0,"max_expanded_bytes_per_archive":0,"max_pdf_pages":0},"artifact":{"max_bytes_per_artifact":0},"disk":{"max_workdir_bytes":0}}"#,
     )
     .expect("write limits.json");
 
@@ -274,6 +345,44 @@ fn run_rejects_limits_json_zero_values() {
         .expect("run veil run");
 
     assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
+fn run_quarantines_pdf_when_max_pdf_pages_exceeded() {
+    let input = TestDir::new("input_limits_pdf_pages");
+    let pdf_bytes = build_pdf_with_page_count(2);
+    std::fs::write(input.join("a.pdf"), pdf_bytes).expect("write input pdf");
+
+    let policy = TestDir::new("policy_limits_pdf_pages");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("output_limits_pdf_pages");
+
+    let limits = TestDir::new("limits_pdf_pages");
+    let limits_path = limits.join("limits.json");
+    std::fs::write(
+        &limits_path,
+        br#"{"schema_version":"limits.v1","archive":{"max_pdf_pages":1}}"#,
+    )
+    .expect("write limits.json");
+
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(&limits_path)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let q = quarantine_index_text(output.path());
+    assert!(q.contains("\"reason_code\":\"PDF_LIMIT_EXCEEDED\""));
 }
 
 #[test]

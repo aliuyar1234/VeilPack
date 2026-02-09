@@ -205,6 +205,63 @@ fn make_tar_symlink(path: &str, target: &str) -> Vec<u8> {
     out
 }
 
+fn escape_pdf_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '(' | ')' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn build_pdf(content_stream: &str) -> Vec<u8> {
+    let mut out = String::new();
+    out.push_str("%PDF-1.4\n");
+
+    let mut offsets = Vec::<usize>::new();
+    let objects = vec![
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_string(),
+        "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_string(),
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n".to_string(),
+        format!(
+            "4 0 obj\n<< /Length {} >>\nstream\n{}\nendstream\nendobj\n",
+            content_stream.len(),
+            content_stream
+        ),
+        "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n".to_string(),
+    ];
+
+    for obj in &objects {
+        offsets.push(out.len());
+        out.push_str(obj);
+    }
+
+    let xref_offset = out.len();
+    out.push_str("xref\n0 6\n");
+    out.push_str("0000000000 65535 f \n");
+    for off in offsets {
+        out.push_str(&format!("{off:010} 00000 n \n"));
+    }
+    out.push_str("trailer\n<< /Size 6 /Root 1 0 R >>\n");
+    out.push_str(&format!("startxref\n{xref_offset}\n%%EOF\n"));
+    out.into_bytes()
+}
+
+fn make_pdf_with_text(text: &str) -> Vec<u8> {
+    let escaped = escape_pdf_text(text);
+    let content = format!("BT /F1 24 Tf 72 720 Td ({escaped}) Tj ET");
+    build_pdf(&content)
+}
+
+fn make_pdf_with_graphics_only() -> Vec<u8> {
+    build_pdf("0 0 200 200 re f")
+}
+
 #[test]
 fn zip_max_entries_limit_quarantines_entire_archive() {
     let input = TestDir::new("zip_entries_input");
@@ -857,4 +914,100 @@ fn zip_extension_with_ndjson_payload_quarantines_parse_error() {
         })
         .expect("find quarantine record");
     assert_eq!(rec.reason_code, "PARSE_ERROR");
+}
+
+#[test]
+fn pdf_searchable_text_is_sanitized() {
+    let input = TestDir::new("pdf_text_input");
+    let pdf_bytes = make_pdf_with_text("hello SECRET");
+    std::fs::write(input.join("a.pdf"), &pdf_bytes).expect("write a.pdf");
+
+    let policy = TestDir::new("pdf_text_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("pdf_text_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(0));
+
+    let sanitized_path = expected_sanitized_path(output.path(), "a.pdf", &pdf_bytes, "ndjson");
+    let sanitized = std::fs::read_to_string(sanitized_path).expect("read sanitized");
+    assert!(!sanitized.contains("SECRET"));
+    assert!(sanitized.contains("{{PII.Test}}"));
+    assert!(sanitized.contains("\"schema_version\":\"veil.pdf.ndjson.v1\""));
+}
+
+#[test]
+fn pdf_graphics_only_quarantines_ocr_required_but_disabled() {
+    let input = TestDir::new("pdf_graphics_input");
+    let pdf_bytes = make_pdf_with_graphics_only();
+    std::fs::write(input.join("a.pdf"), &pdf_bytes).expect("write a.pdf");
+
+    let policy = TestDir::new("pdf_graphics_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("pdf_graphics_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.pdf").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "PDF_OCR_REQUIRED_BUT_DISABLED");
+}
+
+#[test]
+fn pdf_malformed_quarantines_pdf_parse_error() {
+    let input = TestDir::new("pdf_malformed_input");
+    std::fs::write(input.join("a.pdf"), b"not-a-pdf").expect("write a.pdf");
+
+    let policy = TestDir::new("pdf_malformed_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("pdf_malformed_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.pdf").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "PDF_PARSE_ERROR");
 }

@@ -35,6 +35,17 @@ pub enum QuarantineReasonCode {
     UnknownCoverage,
     VerificationFailed,
     InternalError,
+    PdfEncrypted,
+    PdfParseError,
+    PdfMalformed,
+    PdfOcrRequiredButDisabled,
+    PdfOcrFailed,
+    PdfRenderFailed,
+    PdfUnsupportedSurfacePresent,
+    PdfLimitExceeded,
+    PdfEmbeddedFileExtractionFailed,
+    PdfXfaUnsupported,
+    PdfActionsPresentUnsupported,
 }
 
 impl QuarantineReasonCode {
@@ -48,6 +59,17 @@ impl QuarantineReasonCode {
             Self::UnknownCoverage => "UNKNOWN_COVERAGE",
             Self::VerificationFailed => "VERIFICATION_FAILED",
             Self::InternalError => "INTERNAL_ERROR",
+            Self::PdfEncrypted => "PDF_ENCRYPTED",
+            Self::PdfParseError => "PDF_PARSE_ERROR",
+            Self::PdfMalformed => "PDF_MALFORMED",
+            Self::PdfOcrRequiredButDisabled => "PDF_OCR_REQUIRED_BUT_DISABLED",
+            Self::PdfOcrFailed => "PDF_OCR_FAILED",
+            Self::PdfRenderFailed => "PDF_RENDER_FAILED",
+            Self::PdfUnsupportedSurfacePresent => "PDF_UNSUPPORTED_SURFACE_PRESENT",
+            Self::PdfLimitExceeded => "PDF_LIMIT_EXCEEDED",
+            Self::PdfEmbeddedFileExtractionFailed => "PDF_EMBEDDED_FILE_EXTRACTION_FAILED",
+            Self::PdfXfaUnsupported => "PDF_XFA_UNSUPPORTED",
+            Self::PdfActionsPresentUnsupported => "PDF_ACTIONS_PRESENT_UNSUPPORTED",
         }
     }
 }

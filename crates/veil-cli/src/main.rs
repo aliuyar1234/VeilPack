@@ -703,6 +703,7 @@ struct ArchiveLimitsOverride {
     max_entries_per_archive: Option<u32>,
     max_expansion_ratio: Option<u32>,
     max_expanded_bytes_per_archive: Option<u64>,
+    max_pdf_pages: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -762,6 +763,12 @@ fn load_runtime_limits_from_json(path: &Path) -> Result<RuntimeLimits, String> {
             return Err("limits-json max_expanded_bytes_per_archive must be >= 1".to_string());
         }
         archive_limits.max_expanded_bytes_per_archive = v;
+    }
+    if let Some(v) = parsed.archive.max_pdf_pages {
+        if v == 0 {
+            return Err("limits-json max_pdf_pages must be >= 1".to_string());
+        }
+        archive_limits.max_pdf_pages = v;
     }
     if let Some(v) = parsed.artifact.max_bytes_per_artifact {
         if v == 0 {
@@ -1048,6 +1055,7 @@ fn classify_artifact_type(path: &Path) -> String {
         "docx" => "DOCX",
         "pptx" => "PPTX",
         "xlsx" => "XLSX",
+        "pdf" => "PDF",
         _ => "FILE",
     }
     .to_string()
@@ -1405,13 +1413,14 @@ fn ext_for_artifact_type_v1(artifact_type: &str) -> &'static str {
         "DOCX" => "ndjson",
         "PPTX" => "ndjson",
         "XLSX" => "ndjson",
+        "PDF" => "ndjson",
         _ => "bin",
     }
 }
 
 fn verification_artifact_type_v1(artifact_type: &str) -> &'static str {
     match artifact_type {
-        "ZIP" | "TAR" | "EML" | "MBOX" | "DOCX" | "PPTX" | "XLSX" => "NDJSON",
+        "ZIP" | "TAR" | "EML" | "MBOX" | "DOCX" | "PPTX" | "XLSX" | "PDF" => "NDJSON",
         "TEXT" => "TEXT",
         "CSV" => "CSV",
         "TSV" => "TSV",

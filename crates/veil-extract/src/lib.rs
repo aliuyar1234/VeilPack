@@ -1,4 +1,5 @@
 use core::fmt;
+use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 
 use veil_domain::{
@@ -119,6 +120,7 @@ pub struct ExtractorRegistry {
     docx: DocxExtractor,
     pptx: PptxExtractor,
     xlsx: XlsxExtractor,
+    pdf: PdfExtractor,
 }
 
 impl ExtractorRegistry {
@@ -136,6 +138,7 @@ impl ExtractorRegistry {
             docx: DocxExtractor { limits },
             pptx: PptxExtractor { limits },
             xlsx: XlsxExtractor { limits },
+            pdf: PdfExtractor { limits },
         }
     }
 
@@ -158,6 +161,7 @@ impl ExtractorRegistry {
             "DOCX" => self.docx.extract(ctx, bytes),
             "PPTX" => self.pptx.extract(ctx, bytes),
             "XLSX" => self.xlsx.extract(ctx, bytes),
+            "PDF" => self.pdf.extract(ctx, bytes),
             _ => ExtractOutcome::Quarantined {
                 extractor_id: None,
                 reason: QuarantineReasonCode::UnsupportedFormat,
@@ -572,6 +576,16 @@ fn ooxml_coverage_unknown_embedded() -> CoverageMapV1 {
     }
 }
 
+fn pdf_coverage_full() -> CoverageMapV1 {
+    CoverageMapV1 {
+        content_text: CoverageStatus::Full,
+        structured_fields: CoverageStatus::None,
+        metadata: CoverageStatus::Full,
+        embedded_objects: CoverageStatus::None,
+        attachments: CoverageStatus::None,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ZipExtractor {
     limits: ArchiveLimits,
@@ -785,6 +799,143 @@ impl Extractor for XlsxExtractor {
             },
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PdfExtractor {
+    limits: ArchiveLimits,
+}
+
+impl Extractor for PdfExtractor {
+    fn id(&self) -> &'static str {
+        "extract.pdf.v1"
+    }
+
+    fn extract(&self, _ctx: ArtifactContext<'_>, bytes: &[u8]) -> ExtractOutcome {
+        let document = match lopdf::Document::load_mem(bytes) {
+            Ok(doc) => doc,
+            Err(_) => {
+                return ExtractOutcome::Quarantined {
+                    extractor_id: Some(self.id()),
+                    reason: QuarantineReasonCode::PdfParseError,
+                };
+            }
+        };
+
+        if document.is_encrypted() {
+            return ExtractOutcome::Quarantined {
+                extractor_id: Some(self.id()),
+                reason: QuarantineReasonCode::PdfEncrypted,
+            };
+        }
+
+        let pages: BTreeMap<u32, lopdf::ObjectId> = document.get_pages();
+        if pages.is_empty() {
+            return ExtractOutcome::Quarantined {
+                extractor_id: Some(self.id()),
+                reason: QuarantineReasonCode::PdfMalformed,
+            };
+        }
+
+        if u32::try_from(pages.len()).unwrap_or(u32::MAX) > self.limits.max_pdf_pages {
+            return ExtractOutcome::Quarantined {
+                extractor_id: Some(self.id()),
+                reason: QuarantineReasonCode::PdfLimitExceeded,
+            };
+        }
+
+        let mut values = Vec::<serde_json::Value>::new();
+        let mut pages_requiring_ocr = 0_u32;
+        for (seq, (page_number, page_id)) in pages.iter().enumerate() {
+            let page_text = match document.extract_text(&[*page_number]) {
+                Ok(s) => s,
+                Err(_) => {
+                    return ExtractOutcome::Quarantined {
+                        extractor_id: Some(self.id()),
+                        reason: QuarantineReasonCode::PdfParseError,
+                    };
+                }
+            };
+
+            let content_bytes = match document.get_page_content(*page_id) {
+                Ok(c) => c,
+                Err(_) => {
+                    return ExtractOutcome::Quarantined {
+                        extractor_id: Some(self.id()),
+                        reason: QuarantineReasonCode::PdfParseError,
+                    };
+                }
+            };
+
+            let has_page_ops = content_bytes.iter().any(|b| !b.is_ascii_whitespace());
+            let text = sanitize_pdf_text(&page_text);
+            if text.trim().is_empty() {
+                if has_page_ops {
+                    pages_requiring_ocr = pages_requiring_ocr.saturating_add(1);
+                }
+                continue;
+            }
+
+            values.push(make_pdf_text_record(
+                page_number.saturating_sub(1),
+                seq as u32,
+                &text,
+            ));
+        }
+
+        if pages_requiring_ocr > 0 {
+            return ExtractOutcome::Quarantined {
+                extractor_id: Some(self.id()),
+                reason: QuarantineReasonCode::PdfOcrRequiredButDisabled,
+            };
+        }
+
+        ExtractOutcome::Extracted {
+            extractor_id: self.id(),
+            canonical: CanonicalArtifact::Ndjson(CanonicalNdjson { values }),
+            coverage: pdf_coverage_full(),
+        }
+    }
+}
+
+fn sanitize_pdf_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch == '\u{0}' {
+            continue;
+        }
+        if ch == '\r' {
+            out.push('\n');
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn make_pdf_text_record(page_index: u32, seq: u32, text: &str) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "schema_version".to_string(),
+        serde_json::Value::String("veil.pdf.ndjson.v1".to_string()),
+    );
+    map.insert(
+        "page_index".to_string(),
+        serde_json::Value::Number(serde_json::Number::from(page_index as u64)),
+    );
+    map.insert(
+        "surface".to_string(),
+        serde_json::Value::String("text_layer".to_string()),
+    );
+    map.insert(
+        "seq".to_string(),
+        serde_json::Value::Number(serde_json::Number::from(seq as u64)),
+    );
+    map.insert(
+        "text".to_string(),
+        serde_json::Value::String(text.to_string()),
+    );
+    serde_json::Value::Object(map)
 }
 
 fn classify_attachment_archive(

@@ -94,7 +94,7 @@ flowchart LR
 | Group | Types |
 |---|---|
 | Text and structured | `.txt`, `.csv`, `.tsv`, `.json`, `.ndjson` |
-| PDF | `.pdf` (text-layer extraction to canonical NDJSON; image-only pages quarantine fail-closed when OCR is required but not enabled) |
+| PDF | `.pdf` (text-layer extraction to canonical NDJSON; image-only pages use optional local OCR via `limits.v1` `pdf.ocr.*`; fail-closed quarantine when OCR is required but unavailable/failing) |
 | Container and compound | `.zip`, `.tar`, `.eml`, `.mbox`, `.docx`, `.pptx`, `.xlsx` |
 
 Notes:
@@ -226,6 +226,28 @@ cat examples/pdf-redaction/out/sanitized/*.ndjson
 
 This demo is also enforced by integration test:
 `cargo test -p veil-cli --test examples_pdf_demo`
+
+### Enable local OCR for scanned PDFs
+OCR remains strictly local and opt-in. Configure it via `--limits-json`:
+
+```json
+{
+  "schema_version": "limits.v1",
+  "pdf": {
+    "ocr": {
+      "enabled": true,
+      "command": ["python", "tools/pdf_ocr_worker.py"],
+      "timeout_ms": 30000,
+      "max_output_bytes": 1048576
+    }
+  }
+}
+```
+
+Runtime OCR command contract:
+- `stdin`: raw PDF bytes
+- `stdout`: UTF-8 extracted text for the current page
+- env vars: `VEIL_PDF_OCR_PAGE_INDEX`, `VEIL_PDF_OCR_PAGE_NUMBER`, `VEIL_ARTIFACT_ID`, `VEIL_SOURCE_LOCATOR_HASH`
 
 ## Output Layout
 `veil run` writes:

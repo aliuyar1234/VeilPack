@@ -6,3 +6,12 @@
 .idea/
 .vscode/
 
+# Local-only SSOT/session docs (keep out of implementation repo)
+AGENTS.md
+ASSUMPTIONS.md
+AUDIT_REPORT.md
+CHANGELOG.md
+CONSTITUTION.md
+DECISIONS.md
+PROGRESS.md
+QUESTIONS_FOR_USER.md

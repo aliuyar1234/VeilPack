@@ -471,6 +471,7 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         }
 
         proof_tokens_by_artifact.remove(&artifact.sort_key.artifact_id);
+        let artifact_started = std::time::Instant::now();
 
         let bytes = match read_artifact_bytes_for_processing(
             &artifact.path,
@@ -521,7 +522,57 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             artifact_id: &artifact.sort_key.artifact_id,
             source_locator_hash: &artifact.sort_key.source_locator_hash,
         };
-        let extracted = extractors.extract_by_type(&artifact.artifact_type, ctx, &bytes);
+        let extracted = if parsed.isolate_risky_extractors
+            && is_risky_extractor_type(&artifact.artifact_type)
+        {
+            match run_extract_in_worker(
+                &artifact.path,
+                &artifact.artifact_type,
+                archive_limits,
+                runtime_limits.max_processing_ms_per_artifact,
+            ) {
+                Ok(v) => v,
+                Err(_) => {
+                    if ledger
+                        .quarantine(
+                            &artifact.sort_key.artifact_id,
+                            veil_domain::QuarantineReasonCode::InternalError,
+                        )
+                        .is_err()
+                    {
+                        log_error(
+                            log_ctx,
+                            "ledger_write_failed",
+                            "INTERNAL_ERROR",
+                            Some("ledger write failed (redacted)"),
+                        );
+                        return ExitCode::from(EXIT_FATAL);
+                    }
+                    if write_quarantine_raw_or_fail(
+                        parsed.quarantine_copy,
+                        &quarantine_raw_dir,
+                        &artifact.sort_key,
+                        &artifact.artifact_type,
+                        &bytes,
+                        log_ctx,
+                    )
+                    .is_err()
+                    {
+                        return ExitCode::from(EXIT_FATAL);
+                    }
+                    log_artifact_error(
+                        log_ctx,
+                        "extract_worker_failed",
+                        "INTERNAL_ERROR",
+                        &artifact.sort_key,
+                        Some("extract worker failed (redacted)"),
+                    );
+                    continue;
+                }
+            }
+        } else {
+            extractors.extract_by_type(&artifact.artifact_type, ctx, &bytes)
+        };
 
         let (extractor_id, canonical, coverage) = match extracted {
             veil_extract::ExtractOutcome::Extracted {
@@ -713,6 +764,39 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             };
             if ledger
                 .quarantine(&artifact.sort_key.artifact_id, reason)
+                .is_err()
+            {
+                log_error(
+                    log_ctx,
+                    "ledger_write_failed",
+                    "INTERNAL_ERROR",
+                    Some("ledger write failed (redacted)"),
+                );
+                return ExitCode::from(EXIT_FATAL);
+            }
+            if write_quarantine_raw_or_fail(
+                parsed.quarantine_copy,
+                &quarantine_raw_dir,
+                &artifact.sort_key,
+                &artifact.artifact_type,
+                &bytes,
+                log_ctx,
+            )
+            .is_err()
+            {
+                return ExitCode::from(EXIT_FATAL);
+            }
+            continue;
+        }
+
+        if artifact_started.elapsed().as_millis()
+            > u128::from(runtime_limits.max_processing_ms_per_artifact)
+        {
+            if ledger
+                .quarantine(
+                    &artifact.sort_key.artifact_id,
+                    veil_domain::QuarantineReasonCode::LimitExceeded,
+                )
                 .is_err()
             {
                 log_error(
@@ -1243,12 +1327,32 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         return ExitCode::from(EXIT_FATAL);
     }
 
+    if std::env::var("VEIL_FAILPOINT").as_deref() == Ok("after_quarantine_index_write") {
+        log_error(
+            log_ctx,
+            "failpoint_triggered",
+            "INTERNAL_ERROR",
+            Some("failpoint triggered (redacted)"),
+        );
+        return ExitCode::from(EXIT_FATAL);
+    }
+
     if let Err(msg) = write_artifacts_evidence(&artifacts_ndjson_path, &results) {
         log_error(
             log_ctx,
             "write_artifacts_evidence_failed",
             "INTERNAL_ERROR",
             Some(msg.as_str()),
+        );
+        return ExitCode::from(EXIT_FATAL);
+    }
+
+    if std::env::var("VEIL_FAILPOINT").as_deref() == Ok("after_artifacts_evidence_write") {
+        log_error(
+            log_ctx,
+            "failpoint_triggered",
+            "INTERNAL_ERROR",
+            Some("failpoint triggered (redacted)"),
         );
         return ExitCode::from(EXIT_FATAL);
     }

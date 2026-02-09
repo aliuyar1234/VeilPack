@@ -1,5 +1,5 @@
 use core::fmt;
-use std::io::{Cursor, Read};
+use std::io::{BufRead, Cursor, Read};
 
 use veil_domain::{
     ArchiveLimits, ArtifactId, CoverageMapV1, CoverageStatus, QuarantineReasonCode,
@@ -328,18 +328,18 @@ impl Extractor for NdjsonExtractor {
     }
 
     fn extract(&self, _ctx: ArtifactContext<'_>, bytes: &[u8]) -> ExtractOutcome {
-        let text = match std::str::from_utf8(bytes) {
-            Ok(s) => s,
-            Err(_) => {
-                return ExtractOutcome::Quarantined {
-                    extractor_id: Some(self.id()),
-                    reason: QuarantineReasonCode::ParseError,
-                };
-            }
-        };
-
         let mut values = Vec::<serde_json::Value>::new();
-        for line in text.lines() {
+        let reader = std::io::BufReader::new(bytes);
+        for line in reader.lines() {
+            let line = match line {
+                Ok(v) => v,
+                Err(_) => {
+                    return ExtractOutcome::Quarantined {
+                        extractor_id: Some(self.id()),
+                        reason: QuarantineReasonCode::ParseError,
+                    };
+                }
+            };
             let line = line.trim();
             if line.is_empty() {
                 continue;

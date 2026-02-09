@@ -4,6 +4,7 @@ use std::process::Command;
 
 use base64::Engine;
 use serde::Deserialize;
+use serde_json::json;
 use zip::write::FileOptions;
 
 fn veil_cmd() -> Command {
@@ -121,6 +122,16 @@ fn make_zip_bytes(entries: &[(&str, &[u8])], compression: zip::CompressionMethod
 fn write_limits_json(dir: &TestDir, json: &str) -> PathBuf {
     let path = dir.join("limits.json");
     std::fs::write(&path, json).expect("write limits.json");
+    path
+}
+
+fn python_executable() -> String {
+    std::env::var("PYTHON").unwrap_or_else(|_| "python".to_string())
+}
+
+fn write_ocr_script(dir: &TestDir, name: &str, source: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, source).expect("write OCR script");
     path
 }
 
@@ -260,6 +271,40 @@ fn make_pdf_with_text(text: &str) -> Vec<u8> {
 
 fn make_pdf_with_graphics_only() -> Vec<u8> {
     build_pdf("0 0 200 200 re f")
+}
+
+fn make_pdf_with_open_action() -> Vec<u8> {
+    let mut out = String::new();
+    out.push_str("%PDF-1.4\n");
+
+    let content_stream = "BT /F1 24 Tf 72 720 Td (HELLO) Tj ET";
+    let mut offsets = Vec::<usize>::new();
+    let objects = vec![
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R /OpenAction 4 0 R >>\nendobj\n".to_string(),
+        "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_string(),
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n".to_string(),
+        format!(
+            "4 0 obj\n<< /Length {} >>\nstream\n{}\nendstream\nendobj\n",
+            content_stream.len(),
+            content_stream
+        ),
+        "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n".to_string(),
+    ];
+
+    for obj in &objects {
+        offsets.push(out.len());
+        out.push_str(obj);
+    }
+
+    let xref_offset = out.len();
+    out.push_str("xref\n0 6\n");
+    out.push_str("0000000000 65535 f \n");
+    for off in offsets {
+        out.push_str(&format!("{off:010} 00000 n \n"));
+    }
+    out.push_str("trailer\n<< /Size 6 /Root 1 0 R >>\n");
+    out.push_str(&format!("startxref\n{xref_offset}\n%%EOF\n"));
+    out.into_bytes()
 }
 
 #[test]
@@ -978,6 +1023,156 @@ fn pdf_graphics_only_quarantines_ocr_required_but_disabled() {
         })
         .expect("find quarantine record");
     assert_eq!(rec.reason_code, "PDF_OCR_REQUIRED_BUT_DISABLED");
+}
+
+#[test]
+fn pdf_graphics_only_with_ocr_command_is_sanitized() {
+    let input = TestDir::new("pdf_graphics_ocr_input");
+    let pdf_bytes = make_pdf_with_graphics_only();
+    std::fs::write(input.join("a.pdf"), &pdf_bytes).expect("write a.pdf");
+
+    let policy = TestDir::new("pdf_graphics_ocr_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let ocr = TestDir::new("pdf_graphics_ocr_script");
+    let script = write_ocr_script(
+        &ocr,
+        "ocr_success.py",
+        "import os, sys\n_ = sys.stdin.buffer.read()\nif os.environ.get('VEIL_PDF_OCR_PAGE_INDEX') == '0':\n    sys.stdout.write('scan SECRET')\n",
+    );
+    let script_str = script.to_str().expect("UTF-8 script path").to_string();
+
+    let limits = TestDir::new("pdf_graphics_ocr_limits");
+    let limits_json = write_limits_json(
+        &limits,
+        &json!({
+            "schema_version": "limits.v1",
+            "pdf": {
+                "ocr": {
+                    "enabled": true,
+                    "command": [python_executable(), script_str],
+                    "timeout_ms": 5000,
+                    "max_output_bytes": 4096
+                }
+            }
+        })
+        .to_string(),
+    );
+
+    let output = TestDir::new("pdf_graphics_ocr_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(limits_json)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(0));
+    let sanitized_path = expected_sanitized_path(output.path(), "a.pdf", &pdf_bytes, "ndjson");
+    let sanitized = std::fs::read_to_string(sanitized_path).expect("read sanitized");
+    assert!(sanitized.contains("\"surface\":\"ocr\""));
+    assert!(sanitized.contains("{{PII.Test}}"));
+    assert!(!sanitized.contains("SECRET"));
+}
+
+#[test]
+fn pdf_graphics_only_with_ocr_command_failure_quarantines_pdf_ocr_failed() {
+    let input = TestDir::new("pdf_graphics_ocr_fail_input");
+    let pdf_bytes = make_pdf_with_graphics_only();
+    std::fs::write(input.join("a.pdf"), &pdf_bytes).expect("write a.pdf");
+
+    let policy = TestDir::new("pdf_graphics_ocr_fail_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let ocr = TestDir::new("pdf_graphics_ocr_fail_script");
+    let script = write_ocr_script(
+        &ocr,
+        "ocr_fail.py",
+        "import sys\n_ = sys.stdin.buffer.read()\nsys.exit(7)\n",
+    );
+    let script_str = script.to_str().expect("UTF-8 script path").to_string();
+
+    let limits = TestDir::new("pdf_graphics_ocr_fail_limits");
+    let limits_json = write_limits_json(
+        &limits,
+        &json!({
+            "schema_version": "limits.v1",
+            "pdf": {
+                "ocr": {
+                    "enabled": true,
+                    "command": [python_executable(), script_str],
+                    "timeout_ms": 5000,
+                    "max_output_bytes": 4096
+                }
+            }
+        })
+        .to_string(),
+    );
+
+    let output = TestDir::new("pdf_graphics_ocr_fail_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(limits_json)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.pdf").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "PDF_OCR_FAILED");
+}
+
+#[test]
+fn pdf_with_open_action_quarantines_actions_present() {
+    let input = TestDir::new("pdf_open_action_input");
+    let pdf_bytes = make_pdf_with_open_action();
+    std::fs::write(input.join("a.pdf"), &pdf_bytes).expect("write a.pdf");
+
+    let policy = TestDir::new("pdf_open_action_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("pdf_open_action_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.pdf").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "PDF_ACTIONS_PRESENT_UNSUPPORTED");
 }
 
 #[test]

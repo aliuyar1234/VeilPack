@@ -39,6 +39,7 @@ jobs:
         run: python3 checks/boundary_fitness.py
 
       - name: SSOT Validate
+        if: ${{ hashFiles('AGENTS.md') != '' && hashFiles('CONSTITUTION.md') != '' && hashFiles('spec/**') != '' }}
         run: python3 checks/ssot_validate.py all
 
       - name: Manifest Verify

@@ -993,6 +993,59 @@ fn pdf_searchable_text_is_sanitized() {
 }
 
 #[test]
+fn pdf_searchable_text_safe_pdf_mode_outputs_pdf_and_verifies() {
+    let input = TestDir::new("pdf_text_safe_pdf_input");
+    let pdf_bytes = make_pdf_with_text("hello SECRET");
+    std::fs::write(input.join("a.pdf"), &pdf_bytes).expect("write a.pdf");
+
+    let policy = TestDir::new("pdf_text_safe_pdf_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let limits = TestDir::new("pdf_text_safe_pdf_limits");
+    let limits_json = write_limits_json(
+        &limits,
+        r#"{"schema_version":"limits.v1","pdf":{"output_mode":"safe_pdf"}}"#,
+    );
+
+    let output = TestDir::new("pdf_text_safe_pdf_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(limits_json)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(0));
+
+    let sanitized_path = expected_sanitized_path(output.path(), "a.pdf", &pdf_bytes, "pdf");
+    let sanitized = std::fs::read(&sanitized_path).expect("read sanitized pdf");
+    assert!(sanitized.starts_with(b"%PDF-1.4"));
+    assert!(!sanitized.windows(b"SECRET".len()).any(|w| w == b"SECRET"));
+    assert!(
+        sanitized
+            .windows(b"{{PII.Test}}".len())
+            .any(|w| w == b"{{PII.Test}}")
+    );
+
+    let verify = veil_cmd()
+        .arg("verify")
+        .arg("--pack")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil verify");
+    assert_eq!(verify.status.code(), Some(0));
+}
+
+#[test]
 fn pdf_graphics_only_quarantines_ocr_required_but_disabled() {
     let input = TestDir::new("pdf_graphics_input");
     let pdf_bytes = make_pdf_with_graphics_only();

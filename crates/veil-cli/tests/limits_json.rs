@@ -416,6 +416,40 @@ fn run_rejects_limits_json_pdf_ocr_enabled_without_command() {
 }
 
 #[test]
+fn run_rejects_limits_json_pdf_invalid_output_mode() {
+    let input = TestDir::new("input_limits_pdf_invalid_output_mode");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy = TestDir::new("policy_limits_pdf_invalid_output_mode");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("output_limits_pdf_invalid_output_mode");
+    let limits = TestDir::new("limits_pdf_invalid_output_mode");
+    let limits_path = limits.join("limits.json");
+    std::fs::write(
+        &limits_path,
+        br#"{"schema_version":"limits.v1","pdf":{"output_mode":"unknown"}}"#,
+    )
+    .expect("write limits.json");
+
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(&limits_path)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
 fn run_rejects_limits_json_pdf_ocr_zero_values() {
     let input = TestDir::new("input_limits_pdf_ocr_zero_values");
     std::fs::write(input.join("a.txt"), "hello").expect("write input file");
@@ -430,6 +464,40 @@ fn run_rejects_limits_json_pdf_ocr_zero_values() {
     std::fs::write(
         &limits_path,
         br#"{"schema_version":"limits.v1","pdf":{"ocr":{"enabled":true,"command":["python","script.py"],"timeout_ms":0,"max_output_bytes":0}}}"#,
+    )
+    .expect("write limits.json");
+
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .arg("--limits-json")
+        .arg(&limits_path)
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(3));
+}
+
+#[test]
+fn run_rejects_limits_json_pdf_worker_zero_values() {
+    let input = TestDir::new("input_limits_pdf_worker_zero_values");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input file");
+
+    let policy = TestDir::new("policy_limits_pdf_worker_zero_values");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("output_limits_pdf_worker_zero_values");
+    let limits = TestDir::new("limits_pdf_worker_zero_values");
+    let limits_path = limits.join("limits.json");
+    std::fs::write(
+        &limits_path,
+        br#"{"schema_version":"limits.v1","pdf":{"worker":{"timeout_ms":0,"max_output_bytes":0}}}"#,
     )
     .expect("write limits.json");
 

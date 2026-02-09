@@ -1,6 +1,6 @@
 # VeilPack
 
-[![CI](https://github.com/aliuyar1234/VeilPack/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/aliuyar1234/VeilPack/actions/workflows/ci.yml)
+[![CI](https://github.com/aliuyar1234/VeilPack/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/aliuyar1234/VeilPack/actions/workflows/ci.yml)
 ![Rust](https://img.shields.io/badge/rust-stable-000000?logo=rust)
 ![Mode](https://img.shields.io/badge/mode-offline%20first-2ea44f)
 ![Safety](https://img.shields.io/badge/safety-fail--closed-critical)
@@ -16,6 +16,7 @@ VeilPack is an offline, fail-closed privacy gate for enterprise data pipelines. 
 - [How Processing Works](#how-processing-works)
 - [Supported Input Formats](#supported-input-formats)
 - [CLI Overview](#cli-overview)
+- [Operational Hardening](#operational-hardening)
 - [Quickstart](#quickstart)
 - [Worked Example (CSV)](#worked-example-csv)
 - [Output Layout](#output-layout)
@@ -43,7 +44,7 @@ VeilPack is an offline, fail-closed privacy gate for enterprise data pipelines. 
   - `veil run`
   - `veil verify`
   - `veil policy lint`
-- Built-in checks for offline enforcement, boundary fitness, and contract consistency.
+- Built-in checks for offline enforcement, boundary fitness, contract consistency, compatibility matrix validation, and performance regression gating.
 - A deterministic Veil Pack output contract (`pack.v1` + `ledger` schema binding).
 
 ## High-Level Architecture
@@ -117,6 +118,17 @@ Key `run` flags:
 - `--quarantine-copy true|false`
 - `--isolate-risky-extractors true|false`
 - `--limits-json <PATH>`
+
+## Operational Hardening
+- Optional extractor process isolation for risky container/compound formats:
+  - `--isolate-risky-extractors true`
+- Per-artifact runtime bounding through limits JSON:
+  - `artifact.max_processing_ms`
+- Fail-closed crash/resume invariants for evidence + manifests:
+  - explicit regression tests for post-evidence crash points
+- Versioned compatibility controls:
+  - `docs/compatibility-matrix.md`
+  - enforced by `checks/compatibility_matrix_check.py`
 
 ## Quickstart
 ### Prerequisites

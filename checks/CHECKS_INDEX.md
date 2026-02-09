@@ -185,9 +185,33 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 - How to run:
   - `python checks/boundary_fitness.py`
 - Pass/fail:
-  - PASS if dependency graph matches C-101 layering rules.
+  - PASS if dependency graph matches C-101 layering rules and no Rust source file exceeds the configured god-module LOC threshold.
 - Evidence:
   - evidence: PROGRESS.md :: CHK-BOUNDARY-FITNESS
+
+---
+
+## CHK-COMPATIBILITY-MATRIX
+- Purpose: enforce explicit release compatibility policy for pack/ledger schema versions.
+- Type: automated (implemented in repo)
+- How to run:
+  - `python checks/compatibility_matrix_check.py`
+- Pass/fail:
+  - PASS if the compatibility matrix exists, includes the current supported version row, includes unsupported rows, and references regression tests.
+- Evidence:
+  - evidence: PROGRESS.md :: CHK-COMPATIBILITY-MATRIX
+
+---
+
+## CHK-PERF-BASELINE
+- Purpose: prevent unreviewed throughput regressions on the reference corpus.
+- Type: automated (implemented in repo)
+- How to run:
+  - `python checks/perf_harness.py --build --tolerance 0.20 --samples 3`
+- Pass/fail:
+  - PASS if measured throughput is within tolerance of baseline.
+- Evidence:
+  - evidence: PROGRESS.md :: CHK-PERF-BASELINE
 
 ---
 

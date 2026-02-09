@@ -20,6 +20,7 @@ VeilPack is an offline, fail-closed privacy gate for enterprise data pipelines. 
 - [Worked Example (CSV)](#worked-example-csv)
 - [Output Layout](#output-layout)
 - [Exit Codes](#exit-codes)
+- [Contracts and Compatibility](#contracts-and-compatibility)
 - [Development and Quality Gates](#development-and-quality-gates)
 - [Repository Structure](#repository-structure)
 - [Project Notes](#project-notes)
@@ -114,6 +115,7 @@ Key `run` flags:
 - `--enable-tokenization true|false`
 - `--secret-key-file <PATH>`
 - `--quarantine-copy true|false`
+- `--isolate-risky-extractors true|false`
 - `--limits-json <PATH>`
 
 ## Quickstart
@@ -223,6 +225,11 @@ This demo is also enforced by integration test:
 | `1` | Fatal error |
 | `3` | Invalid arguments or invalid policy bundle |
 
+## Contracts and Compatibility
+- Output contract tests: `cargo test -p veil-cli --test contract_consistency --test contract_schema`
+- Compatibility matrix (pack/ledger versions): `docs/compatibility-matrix.md`
+- Error code catalog: `docs/error-codes.md`
+
 ## Development and Quality Gates
 ```bash
 cargo fmt --all -- --check
@@ -230,8 +237,9 @@ cargo clippy --workspace -- -D warnings
 cargo test --workspace
 python checks/offline_enforcement.py
 python checks/boundary_fitness.py
+python checks/compatibility_matrix_check.py
 python checks/ssot_validate.py all
-python checks/perf_harness.py --build
+python checks/perf_harness.py --build --tolerance 0.20 --samples 3
 ```
 
 ## Repository Structure
@@ -246,6 +254,7 @@ crates/
   veil-verify/
   veil-evidence/
 checks/
+docs/
 .github/workflows/ci.yml
 Cargo.toml
 ```

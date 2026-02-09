@@ -38,6 +38,12 @@ jobs:
       - name: Boundary Fitness
         run: python3 checks/boundary_fitness.py
 
+      - name: Compatibility Matrix
+        run: python3 checks/compatibility_matrix_check.py
+
+      - name: Performance Baseline Gate
+        run: python3 checks/perf_harness.py --build --tolerance 0.20 --samples 3
+
       - name: SSOT Validate
         if: ${{ hashFiles('AGENTS.md') != '' && hashFiles('CONSTITUTION.md') != '' && hashFiles('spec/**') != '' }}
         run: python3 checks/ssot_validate.py all

@@ -1,4 +1,5 @@
 import json
+import pathlib
 import subprocess
 import sys
 
@@ -15,6 +16,7 @@ LAYER_ORDER = [
 ]
 
 LAYER_INDEX = {name: i for i, name in enumerate(LAYER_ORDER)}
+MAX_RUST_SOURCE_LOC = 2200
 
 
 def main() -> int:
@@ -53,6 +55,13 @@ def main() -> int:
             print("VIOLATION", pkg_name, "DEPENDS_ON_HIGHER_LAYER", dep_name)
         return 1
 
+    loc_violations = rust_source_size_violations()
+    if loc_violations:
+        print("FAIL")
+        for rel, lines in loc_violations:
+            print("GOD_MODULE", rel, "LINES", lines, "MAX", MAX_RUST_SOURCE_LOC)
+        return 1
+
     print("PASS")
     return 0
 
@@ -68,6 +77,18 @@ def cargo_metadata() -> dict:
     return json.loads(proc.stdout)
 
 
+def rust_source_size_violations() -> list[tuple[str, int]]:
+    root = pathlib.Path(__file__).resolve().parents[1]
+    violations: list[tuple[str, int]] = []
+    for path in sorted((root / "crates").glob("*/src/**/*.rs")):
+        try:
+            line_count = len(path.read_text(encoding="utf-8", errors="ignore").splitlines())
+        except OSError:
+            continue
+        if line_count > MAX_RUST_SOURCE_LOC:
+            violations.append((path.relative_to(root).as_posix(), line_count))
+    return violations
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
-

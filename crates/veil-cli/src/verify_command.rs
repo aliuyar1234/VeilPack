@@ -116,6 +116,30 @@ pub(super) fn cmd_verify(exe: &str, args: &[String]) -> ExitCode {
         );
         return ExitCode::from(EXIT_FATAL);
     }
+    let pdf_output_mode = match pack_manifest.pdf_output_mode.as_deref() {
+        Some(raw) => match PdfOutputMode::from_limits_value(raw) {
+            Some(v) => v,
+            None => {
+                log_error(
+                    log_ctx,
+                    "verify_invalid_pdf_output_mode",
+                    "INTERNAL_ERROR",
+                    Some("pack manifest contains invalid pdf output mode (redacted)"),
+                );
+                return ExitCode::from(EXIT_FATAL);
+            }
+        },
+        None => PdfOutputMode::DerivedNdjson,
+    };
+    let pdf_worker = PdfWorkerOptions {
+        enabled: pack_manifest.pdf_worker_enabled.unwrap_or(false),
+        ..PdfWorkerOptions::default()
+    };
+    let max_pdf_pages = pack_manifest
+        .max_pdf_pages
+        .filter(|v| *v >= 1)
+        .unwrap_or_else(|| veil_domain::ArchiveLimits::default().max_pdf_pages);
+    let pdf_ocr = veil_extract::PdfOcrOptions::default();
 
     if pack_manifest.policy_id != policy.policy_id.to_string() {
         return exit_usage(
@@ -229,7 +253,12 @@ pub(super) fn cmd_verify(exe: &str, args: &[String]) -> ExitCode {
                 }
             };
         let sort_key = veil_domain::ArtifactSortKey::new(artifact_id, source_locator_hash);
-        let path = sanitized_output_path_v1(&sanitized_dir, &sort_key, &rec.artifact_type);
+        let path = sanitized_output_path_v1_with_pdf_mode(
+            &sanitized_dir,
+            &sort_key,
+            &rec.artifact_type,
+            pdf_output_mode,
+        );
         if !expected_verified_paths.insert(path.clone()) {
             log_error(
                 log_ctx,
@@ -286,8 +315,13 @@ pub(super) fn cmd_verify(exe: &str, args: &[String]) -> ExitCode {
             artifact_id: &sort_key.artifact_id,
             source_locator_hash: &sort_key.source_locator_hash,
         };
-        let verify_artifact_type = verification_artifact_type_v1(&rec.artifact_type);
-        let extracted = extractors.extract_by_type(verify_artifact_type, ctx, &bytes);
+        let verify_artifact_type =
+            verification_artifact_type_v1_with_pdf_mode(&rec.artifact_type, pdf_output_mode);
+        let extracted = if verify_artifact_type == "PDF" && pdf_worker.enabled {
+            extract_pdf_via_worker(ctx, &bytes, max_pdf_pages, &pdf_ocr, &pdf_worker)
+        } else {
+            extractors.extract_by_type(verify_artifact_type, ctx, &bytes)
+        };
         let canonical = match extracted {
             veil_extract::ExtractOutcome::Extracted { canonical, .. } => canonical,
             veil_extract::ExtractOutcome::Quarantined { .. } => {

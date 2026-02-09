@@ -24,6 +24,8 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
     };
     let archive_limits = runtime_limits.archive_limits;
     let pdf_ocr_limits = runtime_limits.pdf_ocr.clone();
+    let pdf_output_mode = runtime_limits.pdf_output_mode;
+    let pdf_worker_limits = runtime_limits.pdf_worker.clone();
 
     let policy = match veil_policy::load_policy_bundle(&parsed.policy) {
         Ok(p) => p,
@@ -407,7 +409,7 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
     }
 
     let extractors =
-        veil_extract::ExtractorRegistry::with_pdf_options(archive_limits, pdf_ocr_limits);
+        veil_extract::ExtractorRegistry::with_pdf_options(archive_limits, pdf_ocr_limits.clone());
     let detector = veil_detect::DetectorEngineV1;
     let transformer = veil_transform::TransformerV1;
 
@@ -523,7 +525,17 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             artifact_id: &artifact.sort_key.artifact_id,
             source_locator_hash: &artifact.sort_key.source_locator_hash,
         };
-        let extracted = extractors.extract_by_type(&artifact.artifact_type, ctx, &bytes);
+        let extracted = if artifact.artifact_type == "PDF" && pdf_worker_limits.enabled {
+            extract_pdf_via_worker(
+                ctx,
+                &bytes,
+                archive_limits.max_pdf_pages,
+                &pdf_ocr_limits,
+                &pdf_worker_limits,
+            )
+        } else {
+            extractors.extract_by_type(&artifact.artifact_type, ctx, &bytes)
+        };
 
         let (extractor_id, canonical, coverage) = match extracted {
             veil_extract::ExtractOutcome::Extracted {
@@ -626,7 +638,7 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             return ExitCode::from(EXIT_FATAL);
         }
 
-        let sanitized_bytes = match transformer.transform(&policy, &canonical) {
+        let sanitized_ndjson_bytes = match transformer.transform(&policy, &canonical) {
             veil_transform::TransformOutcome::Transformed { sanitized_bytes } => sanitized_bytes,
             veil_transform::TransformOutcome::Quarantined { reason } => {
                 if ledger
@@ -657,6 +669,45 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             }
         };
 
+        let sanitized_bytes =
+            if artifact.artifact_type == "PDF" && pdf_output_mode == PdfOutputMode::SafePdf {
+                match build_safe_pdf_from_ndjson_bytes(&sanitized_ndjson_bytes) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        if ledger
+                            .quarantine(
+                                &artifact.sort_key.artifact_id,
+                                veil_domain::QuarantineReasonCode::PdfRenderFailed,
+                            )
+                            .is_err()
+                        {
+                            log_error(
+                                log_ctx,
+                                "ledger_write_failed",
+                                "INTERNAL_ERROR",
+                                Some("ledger write failed (redacted)"),
+                            );
+                            return ExitCode::from(EXIT_FATAL);
+                        }
+                        if write_quarantine_raw_or_fail(
+                            parsed.quarantine_copy,
+                            &quarantine_raw_dir,
+                            &artifact.sort_key,
+                            &artifact.artifact_type,
+                            &bytes,
+                            log_ctx,
+                        )
+                        .is_err()
+                        {
+                            return ExitCode::from(EXIT_FATAL);
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                sanitized_ndjson_bytes
+            };
+
         if ledger
             .mark_transformed(&artifact.sort_key.artifact_id)
             .is_err()
@@ -670,8 +721,19 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
             return ExitCode::from(EXIT_FATAL);
         }
 
-        let verify_artifact_type = verification_artifact_type_v1(&artifact.artifact_type);
-        let extracted_out = extractors.extract_by_type(verify_artifact_type, ctx, &sanitized_bytes);
+        let verify_artifact_type =
+            verification_artifact_type_v1_with_pdf_mode(&artifact.artifact_type, pdf_output_mode);
+        let extracted_out = if verify_artifact_type == "PDF" && pdf_worker_limits.enabled {
+            extract_pdf_via_worker(
+                ctx,
+                &sanitized_bytes,
+                archive_limits.max_pdf_pages,
+                &veil_extract::PdfOcrOptions::default(),
+                &pdf_worker_limits,
+            )
+        } else {
+            extractors.extract_by_type(verify_artifact_type, ctx, &sanitized_bytes)
+        };
         let canonical_out = match extracted_out {
             veil_extract::ExtractOutcome::Extracted { canonical, .. } => canonical,
             veil_extract::ExtractOutcome::Quarantined { .. } => {
@@ -743,8 +805,12 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         let output_id = veil_domain::hash_output_id(&sanitized_bytes);
         let output_id_str = output_id.to_string();
 
-        let dest_path =
-            sanitized_output_path_v1(&sanitized_dir, &artifact.sort_key, &artifact.artifact_type);
+        let dest_path = sanitized_output_path_v1_with_pdf_mode(
+            &sanitized_dir,
+            &artifact.sort_key,
+            &artifact.artifact_type,
+            pdf_output_mode,
+        );
 
         if ensure_existing_path_components_safe(&dest_path, "sanitized output").is_err() {
             if ledger
@@ -1302,6 +1368,13 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         },
         quarantine_copy_enabled: parsed.quarantine_copy,
         ledger_schema_version: veil_evidence::LEDGER_SCHEMA_VERSION,
+        pdf_output_mode: if pdf_output_mode == PdfOutputMode::DerivedNdjson {
+            None
+        } else {
+            Some(pdf_output_mode.as_manifest_str())
+        },
+        pdf_worker_enabled: Some(pdf_worker_limits.enabled),
+        max_pdf_pages: Some(archive_limits.max_pdf_pages),
     };
     if write_json_atomic(&pack_manifest_path, &pack_manifest).is_err() {
         log_error(

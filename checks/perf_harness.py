@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import re
+import statistics
 import subprocess
 import tempfile
 import time
@@ -10,6 +11,7 @@ import time
 
 SCHEMA_VERSION = "perf.v1"
 DEFAULT_BASELINE_PATH = pathlib.Path("checks") / "perf_baseline.json"
+DEFAULT_SAMPLES = 3
 
 
 def repo_root() -> pathlib.Path:
@@ -129,6 +131,37 @@ def run_once(veil_bin: pathlib.Path, input_dir: pathlib.Path, output_dir: pathli
     }
 
 
+def summarize_samples(samples: list[dict]) -> dict:
+    if not samples:
+        raise RuntimeError("no perf samples collected")
+
+    throughputs = [float(s["throughput_bytes_per_sec"]) for s in samples]
+    elapsed = [int(s["elapsed_ms"]) for s in samples]
+    median_throughput = float(statistics.median(throughputs))
+    median_elapsed = int(round(statistics.median(elapsed)))
+
+    base = dict(samples[-1])
+    base["sample_count"] = len(samples)
+    base["throughput_samples"] = throughputs
+    base["elapsed_ms_samples"] = elapsed
+    # Keep legacy key as the comparison source while also exposing explicit median.
+    base["throughput_bytes_per_sec"] = median_throughput
+    base["throughput_bytes_per_sec_median"] = median_throughput
+    base["elapsed_ms"] = median_elapsed
+    return base
+
+
+def baseline_throughput(baseline: dict) -> float:
+    samples = baseline.get("throughput_samples")
+    if isinstance(samples, list) and samples:
+        return float(statistics.median(samples))
+
+    if "throughput_bytes_per_sec_median" in baseline:
+        return float(baseline.get("throughput_bytes_per_sec_median", 0.0))
+
+    return float(baseline.get("throughput_bytes_per_sec", 0.0))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--veil-bin", type=pathlib.Path, default=None, help="Path to built veil binary (release)")
@@ -137,6 +170,7 @@ def main() -> int:
     ap.add_argument("--record-baseline", action="store_true", help="Record baseline (overwrite requires --decision-id)")
     ap.add_argument("--decision-id", type=str, default=None, help="Required to overwrite an existing baseline")
     ap.add_argument("--tolerance", type=float, default=0.15, help="Allowed regression ratio (e.g., 0.15 == 15%)")
+    ap.add_argument("--samples", type=int, default=DEFAULT_SAMPLES, help="Number of perf samples to collect (median is used)")
     args = ap.parse_args()
 
     root = repo_root()
@@ -157,13 +191,17 @@ def main() -> int:
         td = pathlib.Path(td)
         input_dir = td / "input"
         policy_dir = td / "policy"
-        output_dir = td / "output"
         policy_dir.mkdir(parents=True, exist_ok=True)
         write_policy(policy_dir, "SECRET")
         write_fixture_corpus(input_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        sample_count = max(1, int(args.samples))
+        samples = []
+        for i in range(sample_count):
+            output_dir = td / f"output_{i:02d}"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            samples.append(run_once(veil_bin, input_dir, output_dir, policy_dir))
 
-        metrics = run_once(veil_bin, input_dir, output_dir, policy_dir)
+        metrics = summarize_samples(samples)
         metrics["tool_version"] = detect_tool_version(root)
 
     if args.record_baseline:
@@ -181,7 +219,7 @@ def main() -> int:
         raise SystemExit(f"baseline missing: {baseline_path} (run with --record-baseline)")
 
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
-    base_tp = float(baseline.get("throughput_bytes_per_sec", 0.0))
+    base_tp = baseline_throughput(baseline)
     cur_tp = float(metrics.get("throughput_bytes_per_sec", 0.0))
 
     floor = base_tp * (1.0 - float(args.tolerance))
@@ -189,6 +227,7 @@ def main() -> int:
 
     print(f"BASELINE_THROUGHPUT {base_tp:.2f}")
     print(f"CURRENT_THROUGHPUT {cur_tp:.2f}")
+    print(f"SAMPLES {metrics.get('sample_count', 1)}")
     print(f"TOLERANCE {args.tolerance:.2f}")
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1

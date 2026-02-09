@@ -1,159 +1,228 @@
-# Veil SSOT Pack (Codex-Ready)
+# VeilPack
 
-This ZIP is the **Single Source of Truth (SSOT)** for implementing **Veil**: an offline, fail-closed privacy gate that converts raw customer-data corpora into **Veil Packs** (sanitized corpus + quarantine + non-sensitive evidence).
+[![CI](https://github.com/aliuyar1234/VeilPack/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/aliuyar1234/VeilPack/actions/workflows/ci.yml)
+![Rust](https://img.shields.io/badge/rust-stable-000000?logo=rust)
+![Mode](https://img.shields.io/badge/mode-offline%20first-2ea44f)
+![Safety](https://img.shields.io/badge/safety-fail--closed-critical)
+![Determinism](https://img.shields.io/badge/output-deterministic-blue)
 
-## Precedence Order (conflict resolution; verbatim)
-1) AGENTS.md
-2) CONSTITUTION.md
-3) spec/* (numeric order; existing files only)
-4) DECISIONS.md
-5) ASSUMPTIONS.md
-6) README.md
-7) templates/*, checks/*, runbook content
+VeilPack is an offline, fail-closed privacy gate for enterprise data pipelines. It ingests mixed corpora, detects sensitive values using policy-defined detectors, rewrites outputs, and emits a verifiable pack that is safe to move downstream.
 
-## Where to find X (evidence pointers only)
+## Table of Contents
+- [Why VeilPack](#why-veilpack)
+- [Who It Is For](#who-it-is-for)
+- [What You Get](#what-you-get)
+- [High-Level Architecture](#high-level-architecture)
+- [How Processing Works](#how-processing-works)
+- [Supported Input Formats](#supported-input-formats)
+- [CLI Overview](#cli-overview)
+- [Quickstart](#quickstart)
+- [Output Layout](#output-layout)
+- [Exit Codes](#exit-codes)
+- [Development and Quality Gates](#development-and-quality-gates)
+- [Repository Structure](#repository-structure)
+- [Project Notes](#project-notes)
 
-### Scope
-evidence: spec/01_SCOPE.md :: Scope Summary
+## Why VeilPack
+- Reduces data-sharing risk by defaulting to strict, deterministic sanitization.
+- Enforces a fail-closed model: each artifact ends `VERIFIED` or `QUARANTINED`.
+- Keeps runtime offline-first for air-gapped and regulated environments.
+- Produces audit-friendly evidence without plaintext sensitive values.
 
-### Architecture
-evidence: spec/02_ARCHITECTURE.md :: Architecture Overview
+## Who It Is For
+- Security and privacy engineering teams that need enforceable data sanitization.
+- Data platform teams that need repeatable, policy-driven preprocessing.
+- ML and analytics teams that need safer corpora before training or sharing.
+- Compliance-focused orgs that need deterministic outputs and verifiable controls.
 
-### Domain model and definitions
-evidence: spec/03_DOMAIN_MODEL.md :: Domain Entities
+## What You Get
+- A Rust workspace with clear layer boundaries (`domain -> policy -> extract -> detect -> transform -> verify -> evidence -> cli`).
+- A production-style CLI:
+  - `veil run`
+  - `veil verify`
+  - `veil policy lint`
+- Built-in checks for offline enforcement, boundary fitness, and contract consistency.
+- A deterministic Veil Pack output contract (`pack.v1` + `ledger` schema binding).
 
-### Interfaces and contracts (CLI + Veil Pack)
-evidence: spec/04_INTERFACES_AND_CONTRACTS.md :: CLI Contract
+## High-Level Architecture
+```mermaid
+flowchart LR
+  A[Input Corpus] --> I[Ingest and Fingerprint]
+  I --> X[Extractor and Coverage]
+  X --> D[Detector Engine]
+  D --> T[Transform and Rewrite]
+  T --> V[Residual Verification]
+  V --> S[Sanitized Output]
+  V --> Q[Quarantine Index]
+  I --> L[(Ledger)]
+  X --> L
+  T --> L
+  V --> L
+  P[Policy Bundle] --> D
+  V --> E[Evidence Builder]
+  E --> M[Pack and Run Manifests]
+```
 
-### Datastore and resumability ledger
-evidence: spec/05_DATASTORE_AND_MIGRATIONS.md :: Ledger Datastore
+### Layer-to-crate mapping
+| Layer | Crate | Responsibility |
+|---|---|---|
+| Domain | `crates/veil-domain` | IDs, invariants, shared config/hashing primitives |
+| Policy | `crates/veil-policy` | Policy schema parsing, validation, policy identity |
+| Extract | `crates/veil-extract` | Format parsing, canonical representation, coverage |
+| Detect | `crates/veil-detect` | Matching engine (regex/checksum/selectors) |
+| Transform | `crates/veil-transform` | Deterministic redact/mask/drop rewrites |
+| Verify | `crates/veil-verify` | Residual safety verification decisions |
+| Evidence | `crates/veil-evidence` | Ledger and non-sensitive evidence persistence |
+| CLI | `crates/veil-cli` | Orchestration, pack emission, command surface |
 
-### Security and threat model
-evidence: spec/06_SECURITY_AND_THREAT_MODEL.md :: Threat Model
+## How Processing Works
+1. Discover artifacts and fingerprint content deterministically.
+2. Extract to canonical representation with explicit coverage metadata.
+3. Detect sensitive findings using compiled policy detectors.
+4. Apply transforms (for example `REDACT`, `MASK`, `DROP`).
+5. Re-scan transformed output (residual verification).
+6. Emit `VERIFIED` outputs only when residual checks pass; otherwise quarantine.
+7. Persist evidence and manifests with no plaintext sensitive values.
 
-### Reliability and operations
-evidence: spec/07_RELIABILITY_AND_OPERATIONS.md :: Reliability Model
+### Terminal state model
+- `VERIFIED`: artifact passed strict coverage and residual verification.
+- `QUARANTINED`: artifact is withheld with a non-sensitive reason code.
 
-### Observability
-evidence: spec/08_OBSERVABILITY.md :: Observability Signals
+## Supported Input Formats
+| Group | Types |
+|---|---|
+| Text and structured | `.txt`, `.csv`, `.tsv`, `.json`, `.ndjson` |
+| Container and compound | `.zip`, `.tar`, `.eml`, `.mbox`, `.docx`, `.pptx`, `.xlsx` |
 
-### Test strategy
-evidence: spec/09_TEST_STRATEGY.md :: Test Pyramid
+Notes:
+- Container parsing is strict by extension contract.
+- Mislabeled container payloads are quarantined (`PARSE_ERROR`).
+- Container-origin sanitized outputs are canonical NDJSON.
 
-### Phases and tasks
-evidence: spec/10_PHASES_AND_TASKS.md :: Roadmap Summary Table
+## CLI Overview
+```text
+veil run --input <PATH> --output <PATH> --policy <PATH> [FLAGS]
+veil verify --pack <PATH> --policy <PATH>
+veil policy lint --policy <PATH>
+```
 
-### Quality gates and checks
-evidence: spec/11_QUALITY_GATES.md :: Quality Gates Index
-evidence: checks/CHECKS_INDEX.md :: Checks Index
+Key `run` flags:
+- `--workdir <PATH>`
+- `--max-workers <N>` (accepted; v1 baseline executes deterministic single-worker)
+- `--strictness strict`
+- `--enable-tokenization true|false`
+- `--secret-key-file <PATH>`
+- `--quarantine-copy true|false`
+- `--limits-json <PATH>`
 
-### Runbook (how to run/build/test)
-evidence: spec/12_RUNBOOK.md :: Local Run Quickstart
+## Quickstart
+### Prerequisites
+- Rust stable toolchain
+- Python 3
 
-### Decisions / assumptions / progress / questions
-evidence: DECISIONS.md :: Decision Log
-evidence: ASSUMPTIONS.md :: Assumptions Log
-evidence: PROGRESS.md :: Task Status Table
-evidence: QUESTIONS_FOR_USER.md :: Open Questions
+### Build and test
+```bash
+cargo build --workspace
+cargo test --workspace
+```
 
-### Self-audit
-evidence: AUDIT_REPORT.md :: SSOT SCORECARD
+### Create a minimal policy bundle
+Create `policy/policy.json`:
 
-## System Tour (15 minutes)
+```json
+{
+  "schema_version": "policy.v1",
+  "classes": [
+    {
+      "class_id": "PII.Test",
+      "severity": "HIGH",
+      "detectors": [
+        {
+          "kind": "regex",
+          "pattern": "SECRET"
+        }
+      ],
+      "action": {
+        "kind": "REDACT"
+      }
+    }
+  ],
+  "defaults": {},
+  "scopes": []
+}
+```
 
-### What Veil is (execution model)
-- **Offline batch CLI** that ingests a corpus (folders/archives/dumps) and emits a **Veil Pack**.
-- **Fail-closed**: every artifact ends **VERIFIED** (safe derivative emitted) or **QUARANTINED** (withheld + reason code).
-- **No plaintext sensitive values** in logs/reports/evidence, ever.
+### Run sanitization
+```bash
+cargo run -p veil-cli -- run \
+  --input ./input \
+  --output ./out \
+  --policy ./policy
+```
 
-### Primary entrypoints (conceptual)
-- `veil run`:
-  - reads input corpus + policy bundle
-  - processes artifacts deterministically via pipeline
-  - emits Veil Pack (sanitized + quarantine index + evidence)
-- `veil verify`:
-  - rescans a Veil Pack output using the same policy
-  - fails if residual sensitive matches are detected under configured detectors
-- `veil policy lint`:
-  - validates policy schema and computes policy identity (policy_id)
+### Verify an emitted pack
+```bash
+cargo run -p veil-cli -- verify \
+  --pack ./out \
+  --policy ./policy
+```
 
-See the full contract:
-evidence: spec/04_INTERFACES_AND_CONTRACTS.md :: CLI Contract
+### Lint a policy bundle
+```bash
+cargo run -p veil-cli -- policy lint --policy ./policy
+```
 
-### Critical flows (fail-closed by design)
-- Raw data ingestion and parsing
-- Sensitive detection + transformation
-- Output emission (sanitized corpus + evidence)
-- Key handling (only when explicitly enabled)
-- Logging and evidence generation
+## Output Layout
+`veil run` writes:
 
-See security model:
-evidence: spec/06_SECURITY_AND_THREAT_MODEL.md :: Critical Flows and Controls
+```text
+<pack_root>/
+  sanitized/
+  quarantine/
+    index.ndjson
+    raw/                     # present only when --quarantine-copy=true
+  evidence/
+    run_manifest.json
+    artifacts.ndjson
+    ledger.sqlite3
+  pack_manifest.json
+```
 
-### Minimal path to implement
-- Implement PHASE_0_BOOTSTRAP then PHASE_1_CORE_PIPELINE, then PHASE_2_POLICY_BUNDLE and PHASE_3_EVIDENCE_AND_AUDIT.
-evidence: spec/10_PHASES_AND_TASKS.md :: PHASE_0_BOOTSTRAP
+## Exit Codes
+| Code | Meaning |
+|---|---|
+| `0` | Run completed and all artifacts are `VERIFIED` |
+| `2` | Run completed with one or more `QUARANTINED` artifacts |
+| `1` | Fatal error |
+| `3` | Invalid arguments or invalid policy bundle |
 
-## Change Map (if you change X, update Y)
+## Development and Quality Gates
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace -- -D warnings
+cargo test --workspace
+python checks/offline_enforcement.py
+python checks/boundary_fitness.py
+python checks/ssot_validate.py all
+python checks/perf_harness.py --build
+```
 
-1) **Change safety definition / VERIFIED criteria**
-- Update: evidence: spec/03_DOMAIN_MODEL.md :: VERIFIED and QUARANTINED
-- Update: evidence: spec/06_SECURITY_AND_THREAT_MODEL.md :: Safety Definition
-- Update gates: evidence: spec/11_QUALITY_GATES.md :: G-SEC-VERIFY-RESIDUAL
+## Repository Structure
+```text
+crates/
+  veil-cli/
+  veil-domain/
+  veil-policy/
+  veil-extract/
+  veil-detect/
+  veil-transform/
+  veil-verify/
+  veil-evidence/
+checks/
+.github/workflows/ci.yml
+Cargo.toml
+```
 
-2) **Add a new detector class**
-- Update: evidence: spec/04_INTERFACES_AND_CONTRACTS.md :: Policy Bundle Schema v1
-- Update tests: evidence: spec/09_TEST_STRATEGY.md :: Detector tests:
-
-3) **Add a new extractor / format**
-- Update: evidence: spec/02_ARCHITECTURE.md :: Extractor Contract and Coverage Map
-- Update threat model: evidence: spec/06_SECURITY_AND_THREAT_MODEL.md :: Format Risk and Coverage
-- Update tasks: evidence: spec/10_PHASES_AND_TASKS.md :: PHASE_4_FORMATS_AND_LIMITS
-
-4) **Change archive safety limits**
-- Update: evidence: DECISIONS.md :: D-0006
-- Update gate: evidence: spec/11_QUALITY_GATES.md :: G-REL-ARCHIVE-LIMITS
-
-5) **Change tokenization / proof digest rules**
-- Update: evidence: DECISIONS.md :: D-0004
-- Update: evidence: DECISIONS.md :: D-0007
-- Update security gates: evidence: spec/11_QUALITY_GATES.md :: G-SEC-KEY-HANDLING
-
-6) **Change Veil Pack layout or schema versions**
-- Update: evidence: spec/04_INTERFACES_AND_CONTRACTS.md :: Veil Pack Layout v1
-- Update compatibility gates: evidence: spec/11_QUALITY_GATES.md :: G-COMP-PACK-COMPAT
-
-7) **Change logging**
-- Update: evidence: spec/08_OBSERVABILITY.md :: Log Redaction Rules
-- Update gate: evidence: spec/11_QUALITY_GATES.md :: G-SEC-NO-PLAINTEXT-LEAKS
-
-8) **Change module boundaries**
-- Update: evidence: spec/02_ARCHITECTURE.md :: Dependency Direction Rules
-- Update gate: evidence: spec/11_QUALITY_GATES.md :: G-MAINT-BOUNDARY-FITNESS
-
-9) **Change ledger schema**
-- Update: evidence: spec/05_DATASTORE_AND_MIGRATIONS.md :: Schema v1
-- Update gate: evidence: spec/11_QUALITY_GATES.md :: G-REL-LEDGER-RESUME
-
-10) **Introduce any external I/O**
-- Must remain disabled-by-default and fail-closed per autonomy policy.
-- Update: evidence: spec/06_SECURITY_AND_THREAT_MODEL.md :: Offline-First Enforcement
-
-## Drift detection (MANIFEST.sha256)
-- Any change to any file in this pack requires regenerating MANIFEST.sha256.
-- Verification procedure:
-evidence: checks/CHECKS_INDEX.md :: CHK-MANIFEST-VERIFY
-
----
-
-## Implementation bootstrap (PHASE_0)
-This repository now contains an initial Rust workspace scaffold aligned to the C-101 layers.
-
-- Workspace: `Cargo.toml` + `crates/*`
-- CLI binary (stub): `crates/veil-cli` (run via Cargo; binary name is `veil`)
-- Boundary check: `python checks/boundary_fitness.py`
-
-Quickstart:
-- `cargo build --workspace`
-- `cargo test --workspace`
-- `cargo run -p veil-cli -- --help`
+## Project Notes
+- This repository currently does not declare an open-source license file.
+- Internal SSOT/session documentation is intentionally kept local and out of the implementation repository history.

@@ -272,5 +272,5 @@ Cargo.toml
 ```
 
 ## Project Notes
-- This repository currently does not declare an open-source license file.
+- This repository is licensed under Apache License 2.0 (`LICENSE`).
 - Internal SSOT/session documentation is intentionally kept local and out of the implementation repository history.

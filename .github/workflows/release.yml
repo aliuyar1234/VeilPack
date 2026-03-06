@@ -75,7 +75,7 @@ jobs:
           ref: ${{ needs.prepare.outputs.tag }}
 
       - name: Setup Python
-        uses: actions/setup-python@42375524ee3024772f2d93f65e4aeb0750a2c82f # v5.4.0
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: "3.12"
 

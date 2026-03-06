@@ -6,156 +6,117 @@
 ![Safety](https://img.shields.io/badge/safety-fail--closed-critical)
 ![Determinism](https://img.shields.io/badge/output-deterministic-blue)
 
-VeilPack is an offline, fail-closed privacy gate for enterprise data pipelines. It ingests mixed corpora, detects sensitive values using policy-defined detectors, rewrites outputs, and emits a verifiable pack that is safe to move downstream.
+VeilPack is an offline, fail-closed CLI for sanitizing corpora before they move into analytics, ML, or external sharing. It detects policy-defined sensitive values, rewrites supported artifacts, quarantines anything that cannot be handled safely, and emits a Veil Pack that can be verified later with the same policy bundle.
 
-## Table of Contents
-- [Why VeilPack](#why-veilpack)
-- [Who It Is For](#who-it-is-for)
-- [What You Get](#what-you-get)
-- [High-Level Architecture](#high-level-architecture)
-- [How Processing Works](#how-processing-works)
-- [Supported Input Formats](#supported-input-formats)
-- [CLI Overview](#cli-overview)
-- [Operational Hardening](#operational-hardening)
-- [Quickstart](#quickstart)
-- [Worked Example (CSV)](#worked-example-csv)
-- [Output Layout](#output-layout)
-- [Exit Codes](#exit-codes)
-- [Contracts and Compatibility](#contracts-and-compatibility)
-- [Development and Quality Gates](#development-and-quality-gates)
-- [Repository Structure](#repository-structure)
-- [Project Notes](#project-notes)
+## Why it exists
 
-## Why VeilPack
-- Reduces data-sharing risk by defaulting to strict, deterministic sanitization.
-- Enforces a fail-closed model: each artifact ends `VERIFIED` or `QUARANTINED`.
-- Keeps runtime offline-first for air-gapped and regulated environments.
-- Produces audit-friendly evidence without plaintext sensitive values.
+- Keep sensitive source data out of downstream systems by default.
+- Fail closed when parsing, extraction, verification, or integrity checks are not trustworthy.
+- Produce deterministic outputs and non-sensitive evidence that are stable enough to test and re-verify.
+- Stay usable in offline or tightly controlled environments.
 
-## Who It Is For
-- Security and privacy engineering teams that need enforceable data sanitization.
-- Data platform teams that need repeatable, policy-driven preprocessing.
-- ML and analytics teams that need safer corpora before training or sharing.
-- Compliance-focused orgs that need deterministic outputs and verifiable controls.
+## What you get today
 
-## What You Get
-- A Rust workspace with clear layer boundaries (`domain -> policy -> extract -> detect -> transform -> verify -> evidence -> cli`).
-- A production-style CLI:
-  - `veil run`
-  - `veil verify`
-  - `veil policy lint`
-- Built-in checks for offline enforcement, boundary fitness, contract consistency, compatibility matrix validation, and performance regression gating.
-- A deterministic Veil Pack output contract (`pack.v1` + `ledger` schema binding).
+- `veil run` to process a corpus into a Veil Pack.
+- `veil verify` to re-check pack integrity, sanitized output identity, and residual policy cleanliness.
+- `veil policy lint` to validate a policy bundle and compute its `policy_id`.
+- Release artifacts for Linux, macOS, and Windows under [Releases](https://github.com/aliuyar1234/VeilPack/releases/latest).
+- A workspace split by responsibility: `domain -> policy -> extract -> detect -> transform -> verify -> evidence -> cli`.
 
-## High-Level Architecture
-```mermaid
-flowchart LR
-  A[Input Corpus] --> I[Ingest and Fingerprint]
-  I --> X[Extractor and Coverage]
-  X --> D[Detector Engine]
-  D --> T[Transform and Rewrite]
-  T --> V[Residual Verification]
-  V --> S[Sanitized Output]
-  V --> Q[Quarantine Index]
-  I --> L[(Ledger)]
-  X --> L
-  T --> L
-  V --> L
-  P[Policy Bundle] --> D
-  V --> E[Evidence Builder]
-  E --> M[Pack and Run Manifests]
-```
+## Safety model
 
-### Layer-to-crate mapping
-| Layer | Crate | Responsibility |
-|---|---|---|
-| Domain | `crates/veil-domain` | IDs, invariants, shared config/hashing primitives |
-| Policy | `crates/veil-policy` | Policy schema parsing, validation, policy identity |
-| Extract | `crates/veil-extract` | Format parsing, canonical representation, coverage |
-| Detect | `crates/veil-detect` | Matching engine (regex/checksum/selectors) |
-| Transform | `crates/veil-transform` | Deterministic redact/mask/drop rewrites |
-| Verify | `crates/veil-verify` | Residual safety verification decisions |
-| Evidence | `crates/veil-evidence` | Ledger and non-sensitive evidence persistence |
-| CLI | `crates/veil-cli` | Orchestration, pack emission, command surface |
+- Offline-first: the repo has both static and runtime offline enforcement checks.
+- Fail-closed: unsupported formats, parse failures, unsafe archive paths, unknown coverage, residual matches, and evidence tampering do not pass as clean output.
+- Deterministic: structured formats are canonicalized, sanitized filenames are hashed, and pack metadata is versioned.
+- Re-verifiable: `veil verify` checks both content cleanliness and recorded output identity for previously verified artifacts.
 
-## How Processing Works
-1. Discover artifacts and fingerprint content deterministically.
-2. Extract to canonical representation with explicit coverage metadata.
-3. Detect sensitive findings using compiled policy detectors.
-4. Apply transforms (for example `REDACT`, `MASK`, `DROP`).
-5. Re-scan transformed output (residual verification).
-6. Emit `VERIFIED` outputs only when residual checks find no remaining policy matches; otherwise quarantine.
-7. Persist evidence and manifests with no plaintext sensitive values.
+## Install or build
 
-### Terminal state model
-- `VERIFIED`: artifact passed strict coverage and residual verification.
-- `VERIFIED`: artifact passed strict coverage, residual verification, and output identity recording.
-- `QUARANTINED`: artifact is withheld with a non-sensitive reason code.
+### Option 1: download a release
 
-## Supported Input Formats
-| Group | Types |
-|---|---|
-| Text and structured | `.txt`, `.csv`, `.tsv`, `.json`, `.ndjson` |
-| Container and compound | `.zip`, `.tar`, `.eml`, `.mbox`, `.docx`, `.pptx`, `.xlsx` |
+Download the latest archive for your platform from [GitHub Releases](https://github.com/aliuyar1234/VeilPack/releases/latest) and verify the matching `.sha256` file.
 
-Notes:
-- Container parsing is strict by extension contract.
-- Mislabeled container payloads are quarantined (`PARSE_ERROR`).
-- Container-origin sanitized outputs are canonical NDJSON.
+### Option 2: build from source
 
-## CLI Overview
-```text
-veil run --input <PATH> --output <PATH> --policy <PATH> [FLAGS]
-veil verify --pack <PATH> --policy <PATH>
-veil policy lint --policy <PATH>
-```
+Prerequisites:
 
-Key `run` flags:
-- `--workdir <PATH>`
-- `--max-workers <N>` (accepted; v1 baseline executes deterministic single-worker)
-- `--strictness strict`
-- `--enable-tokenization true|false`
-- `--secret-key-file <PATH>`
-- `--quarantine-copy true|false`
-- `--isolate-risky-extractors true|false`
-- `--limits-json <PATH>`
-
-## Operational Hardening
-- Optional extractor process isolation for risky container/compound formats:
-  - `--isolate-risky-extractors true`
-- Per-artifact runtime bounding through limits JSON:
-  - `artifact.max_processing_ms`
-- Fail-closed crash/resume invariants for evidence + manifests:
-  - explicit regression tests for post-evidence crash points
-- Versioned compatibility controls:
-  - `docs/compatibility-matrix.md`
-  - enforced by `checks/compatibility_matrix_check.py`
-
-## Quickstart
-### Prerequisites
-- Rust stable toolchain
+- Rust stable
 - Python 3
 
-### Build and test
+Build the CLI:
+
 ```bash
-cargo build --workspace
-cargo test --workspace
+cargo build -p veil-cli --release
 ```
 
-### Create a minimal policy bundle
-Create `policy/policy.json`:
+The binary will be:
+
+- `target/release/veil` on Linux and macOS
+- `target\release\veil.exe` on Windows
+
+## Fastest demo
+
+The repo includes a working CSV demo in [`examples/csv-redaction`](examples/csv-redaction).
+
+Run it from the repository root:
+
+```bash
+cargo run -p veil-cli -- run \
+  --input examples/csv-redaction/input \
+  --output out \
+  --policy examples/csv-redaction/policy
+```
+
+Then verify the emitted pack:
+
+```bash
+cargo run -p veil-cli -- verify \
+  --pack out \
+  --policy examples/csv-redaction/policy
+```
+
+Inspect the sanitized CSV:
+
+```bash
+cat out/sanitized/*.csv
+```
+
+PowerShell equivalent:
+
+```powershell
+Get-Content -Raw out/sanitized/*.csv
+```
+
+Expected content:
+
+```csv
+customer_id,name,email,notes
+1,Alice,{{PII.Email}},priority_customer
+2,Bob,{{PII.Email}},call_after_5pm
+```
+
+The same flow is covered by the integration test `cargo test -p veil-cli --test examples_csv_demo`.
+
+## Policy bundles
+
+Policy bundles are directories. The example bundle lives at [`examples/csv-redaction/policy`](examples/csv-redaction/policy) and contains a `policy.json` like this:
 
 ```json
 {
   "schema_version": "policy.v1",
   "classes": [
     {
-      "class_id": "PII.Test",
+      "class_id": "PII.Email",
       "severity": "HIGH",
       "detectors": [
         {
+          "kind": "field_selector",
+          "selector": "csv_header",
+          "fields": ["email"]
+        },
+        {
           "kind": "regex",
-          "pattern": "SECRET"
+          "pattern": "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
         }
       ],
       "action": {
@@ -168,115 +129,116 @@ Create `policy/policy.json`:
 }
 ```
 
-### Run sanitization
-```bash
-cargo run -p veil-cli -- run \
-  --input ./input \
-  --output ./out \
-  --policy ./policy
-```
-
-### Verify an emitted pack
-```bash
-cargo run -p veil-cli -- verify \
-  --pack ./out \
-  --policy ./policy
-```
-
-`veil verify` re-checks both sanitized output identity and residual policy cleanliness for every verified artifact.
-
-### Lint a policy bundle
-```bash
-cargo run -p veil-cli -- policy lint --policy ./policy
-```
-
-## Worked Example (CSV)
-Use the committed end-to-end demo under `examples/csv-redaction`:
-
-- walkthrough: `examples/csv-redaction/README.md`
-- input corpus: `examples/csv-redaction/input/customers.csv`
-- policy: `examples/csv-redaction/policy/policy.json`
-- expected sanitized content: `examples/csv-redaction/expected/customers.sanitized.csv`
-
-Run it:
+Validate a bundle and print its `policy_id`:
 
 ```bash
-cargo run -p veil-cli -- run \
-  --input examples/csv-redaction/input \
-  --output examples/csv-redaction/out \
-  --policy examples/csv-redaction/policy
+cargo run -p veil-cli -- policy lint --policy examples/csv-redaction/policy
 ```
 
-Then inspect:
+## Supported input formats
 
-```bash
-cat examples/csv-redaction/out/sanitized/*.csv
+| Group | Types |
+|---|---|
+| Text and structured | `.txt`, `.csv`, `.tsv`, `.json`, `.ndjson` |
+| Container and compound | `.zip`, `.tar`, `.eml`, `.mbox`, `.docx`, `.pptx`, `.xlsx` |
+
+Notes:
+
+- Container parsing is strict by extension contract.
+- Unsafe paths, malformed content, encrypted payloads, expansion-limit breaches, and unknown coverage fail closed.
+- Sanitized output from container-style inputs is emitted as canonical NDJSON.
+
+## Command reference
+
+```text
+veil run --input <PATH> --output <PATH> --policy <PATH> [FLAGS]
+veil verify --pack <PATH> --policy <PATH>
+veil policy lint --policy <PATH>
 ```
 
-This demo is also enforced by integration test:
-`cargo test -p veil-cli --test examples_csv_demo`
+Important `run` flags:
 
-## Output Layout
-`veil run` writes:
+- `--policy <PATH>` always points to a policy bundle directory, not directly to a `policy.json` file.
+- `--output <PATH>` must be a new or empty directory, or an existing in-progress pack when resuming.
+- `--workdir <PATH>` for an alternate work directory. The default is `<output>/.veil_work/`.
+- `--limits-json <PATH>` to override safety limits.
+- `--isolate-risky-extractors true|false` to run risky extractors in a worker process.
+- `--quarantine-copy true|false` to retain raw quarantined bytes under `quarantine/raw/`.
+- `--enable-tokenization true|false` with `--secret-key-file <PATH>` for opt-in tokenization.
+- `--strictness strict` because strict is the only supported baseline in `policy.v1`.
+- `--max-workers <N>` is accepted, but the current baseline still executes deterministically in single-worker mode.
+
+## What a Veil Pack contains
+
+A typical run writes:
 
 ```text
 <pack_root>/
+  pack_manifest.json
   sanitized/
   quarantine/
     index.ndjson
-    raw/                     # present only when --quarantine-copy=true
+    raw/                     # only when --quarantine-copy=true
   evidence/
     run_manifest.json
     artifacts.ndjson
     ledger.sqlite3
-  pack_manifest.json
+  .veil_work/                # default internal workdir unless overridden
 ```
 
-## Exit Codes
+Key details:
+
+- `pack_manifest.json` records `pack_schema_version`, `ledger_schema_version`, `tool_version`, `run_id`, `policy_id`, and `input_corpus_id`.
+- `sanitized/` filenames are content-addressed, not source filenames.
+- `evidence/artifacts.ndjson` records per-artifact state and `output_id` for verified outputs.
+- `quarantine/index.ndjson` stays non-sensitive and explains why an artifact did not pass.
+
+## Exit codes
+
 | Code | Meaning |
 |---|---|
 | `0` | Run completed and all artifacts are `VERIFIED` |
+| `1` | Fatal error or failed verification |
 | `2` | Run completed with one or more `QUARANTINED` artifacts |
-| `1` | Fatal error |
-| `3` | Invalid arguments or invalid policy bundle |
+| `3` | Invalid CLI usage or invalid policy input |
 
-## Contracts and Compatibility
-- Output contract tests: `cargo test -p veil-cli --test contract_consistency --test contract_schema`
-- Compatibility matrix (pack/ledger versions): `docs/compatibility-matrix.md`
-- Error code catalog: `docs/error-codes.md`
+## Quality gates
 
-## Development and Quality Gates
+Main CI runs the same gates you can run locally:
+
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace -- -D warnings
 cargo test --workspace
 python checks/offline_enforcement.py
+cargo test -p veil-cli --test offline_enforcement
 python checks/boundary_fitness.py
 python checks/compatibility_matrix_check.py
-python checks/ssot_validate.py all
 python checks/perf_harness.py --build --tolerance 0.20 --samples 3
 ```
 
-## Repository Structure
-```text
-crates/
-  veil-cli/
-  veil-domain/
-  veil-policy/
-  veil-extract/
-  veil-detect/
-  veil-transform/
-  veil-verify/
-  veil-evidence/
-checks/
-docs/
-.github/workflows/ci.yml
-Cargo.toml
-```
+Additional SSOT validation exists in `checks/ssot_validate.py` and is only active when the corresponding local SSOT/spec files are present.
 
-## Project Notes
-- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Security reporting: [SECURITY.md](SECURITY.md)
-- Tagged releases are published by the GitHub Actions `Release` workflow.
-- This repository is licensed under Apache License 2.0 (`LICENSE`).
-- Internal SSOT/session documentation is intentionally kept local and out of the implementation repository history.
+## Repository map
+
+- `crates/veil-cli`: CLI entrypoints, run orchestration, pack verification.
+- `crates/veil-extract`: format extraction, archive handling, coverage decisions.
+- `crates/veil-detect`: detector execution and selector handling.
+- `crates/veil-transform`: deterministic redact, mask, drop, and related rewrites.
+- `crates/veil-verify`: residual verification decisions.
+- `crates/veil-evidence`: ledger persistence and evidence records.
+- `crates/veil-domain`: shared IDs, hashing, invariants, and common types.
+- `crates/veil-policy`: policy parsing, validation, and policy identity.
+- `checks/`: repo-level enforcement scripts and perf harness.
+- `docs/`: compatibility and operational contract docs.
+- `examples/`: runnable demos.
+
+## Docs and references
+
+- [Examples](examples/README.md)
+- [Compatibility matrix](docs/compatibility-matrix.md)
+- [Error codes](docs/error-codes.md)
+- [Checks index](checks/CHECKS_INDEX.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Apache-2.0 license](LICENSE)

@@ -9,13 +9,21 @@ fn veil_cmd() -> Command {
 }
 
 fn policy_json_single_class(detector_pattern: &str, action_json: &str) -> String {
+    policy_json_single_class_with_severity(detector_pattern, action_json, "HIGH")
+}
+
+fn policy_json_single_class_with_severity(
+    detector_pattern: &str,
+    action_json: &str,
+    severity: &str,
+) -> String {
     format!(
         r#"{{
   "schema_version": "policy.v1",
   "classes": [
     {{
       "class_id": "PII.Canary",
-      "severity": "HIGH",
+      "severity": "{severity}",
       "detectors": [
         {{
           "kind": "regex",
@@ -306,6 +314,76 @@ fn residual_verification_quarantines_on_high_residual() {
 }
 
 #[test]
+fn residual_verification_quarantines_on_medium_residual() {
+    let input = TestDir::new("residual_medium_input");
+    std::fs::write(input.join("a.txt"), "card=1234").expect("write input");
+
+    let policy = TestDir::new("residual_medium_policy");
+    std::fs::write(
+        policy.join("policy.json"),
+        policy_json_single_class_with_severity(
+            "1234",
+            r#"{ "kind": "MASK", "keep_last": 4 }"#,
+            "MEDIUM",
+        ),
+    )
+    .expect("write policy.json");
+
+    let output = TestDir::new("residual_medium_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+
+    let quarantine_index =
+        std::fs::read_to_string(output.join("quarantine").join("index.ndjson")).unwrap();
+    assert!(quarantine_index.contains("VERIFICATION_FAILED"));
+}
+
+#[test]
+fn residual_verification_quarantines_on_low_residual() {
+    let input = TestDir::new("residual_low_input");
+    std::fs::write(input.join("a.txt"), "card=1234").expect("write input");
+
+    let policy = TestDir::new("residual_low_policy");
+    std::fs::write(
+        policy.join("policy.json"),
+        policy_json_single_class_with_severity(
+            "1234",
+            r#"{ "kind": "MASK", "keep_last": 4 }"#,
+            "LOW",
+        ),
+    )
+    .expect("write policy.json");
+
+    let output = TestDir::new("residual_low_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+
+    let quarantine_index =
+        std::fs::read_to_string(output.join("quarantine").join("index.ndjson")).unwrap();
+    assert!(quarantine_index.contains("VERIFICATION_FAILED"));
+}
+
+#[test]
 fn determinism_double_run_produces_identical_outputs() {
     let input = TestDir::new("det_input");
     std::fs::write(input.join("a.txt"), "hello").expect("write input");
@@ -394,6 +472,103 @@ fn verify_fails_on_tampered_verified_output() {
         .output()
         .expect("run veil verify");
     assert_eq!(verify.status.code(), Some(2));
+}
+
+#[test]
+fn verify_fails_on_detector_clean_substitution() {
+    let input = TestDir::new("verify_clean_sub_input");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input");
+
+    let policy = TestDir::new("verify_clean_sub_policy");
+    std::fs::write(
+        policy.join("policy.json"),
+        policy_json_single_class("NO_MATCH", r#"{ "kind": "REDACT" }"#),
+    )
+    .expect("write policy.json");
+
+    let output = TestDir::new("verify_clean_sub_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+    assert_eq!(out.status.code(), Some(0));
+
+    let sanitized_file = std::fs::read_dir(output.join("sanitized"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.is_file())
+        .expect("find sanitized file");
+    std::fs::write(&sanitized_file, b"replacement but detector-clean").expect("replace output");
+
+    let verify = veil_cmd()
+        .arg("verify")
+        .arg("--pack")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil verify");
+    assert_eq!(verify.status.code(), Some(2));
+}
+
+#[test]
+fn verify_fails_when_evidence_downgrades_a_verified_artifact() {
+    let input = TestDir::new("verify_evidence_downgrade_input");
+    std::fs::write(input.join("a.txt"), "hello").expect("write input");
+
+    let policy = TestDir::new("verify_evidence_downgrade_policy");
+    std::fs::write(
+        policy.join("policy.json"),
+        policy_json_single_class("NO_MATCH", r#"{ "kind": "REDACT" }"#),
+    )
+    .expect("write policy.json");
+
+    let output = TestDir::new("verify_evidence_downgrade_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+    assert_eq!(out.status.code(), Some(0));
+
+    let artifacts_path = output.join("evidence").join("artifacts.ndjson");
+    let first = std::fs::read_to_string(&artifacts_path).expect("read artifacts");
+    let mut record: serde_json::Value = serde_json::from_str(first.trim()).expect("parse record");
+    record["state"] = serde_json::Value::String("QUARANTINED".to_string());
+    record["quarantine_reason_code"] = serde_json::Value::String("INTERNAL_ERROR".to_string());
+    std::fs::write(
+        &artifacts_path,
+        serde_json::to_vec(&record).expect("serialize record"),
+    )
+    .expect("write artifacts");
+
+    let sanitized_file = std::fs::read_dir(output.join("sanitized"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.is_file())
+        .expect("find sanitized file");
+    std::fs::remove_file(sanitized_file).expect("remove sanitized file");
+
+    let verify = veil_cmd()
+        .arg("verify")
+        .arg("--pack")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil verify");
+    assert_eq!(verify.status.code(), Some(1));
 }
 
 #[test]

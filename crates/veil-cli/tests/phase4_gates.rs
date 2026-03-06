@@ -670,6 +670,170 @@ fn eml_headers_and_body_are_sanitized() {
 }
 
 #[test]
+fn mbox_body_line_starting_with_from_fails_closed() {
+    let input = TestDir::new("mbox_from_body_input");
+    let mbox = concat!(
+        "From sender@example.com Sat Jan 01 00:00:00 2022\n",
+        "Subject: test\n",
+        "Content-Type: text/plain; charset=utf-8\n",
+        "\n",
+        "hello\n",
+        "From SECRET\n",
+        "world\n",
+    );
+    std::fs::write(input.join("a.mbox"), mbox).expect("write a.mbox");
+
+    let policy = TestDir::new("mbox_from_body_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("mbox_from_body_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.mbox").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "PARSE_ERROR");
+}
+
+#[test]
+fn mbox_escaped_from_body_line_is_sanitized() {
+    let input = TestDir::new("mbox_escaped_from_input");
+    let mbox = concat!(
+        "From sender@example.com Sat Jan 01 00:00:00 2022\n",
+        "Subject: test\n",
+        "Content-Type: text/plain; charset=utf-8\n",
+        "\n",
+        ">From SECRET\n",
+    );
+    std::fs::write(input.join("a.mbox"), mbox).expect("write a.mbox");
+
+    let policy = TestDir::new("mbox_escaped_from_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("mbox_escaped_from_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(0));
+
+    let sanitized_path =
+        expected_sanitized_path(output.path(), "a.mbox", mbox.as_bytes(), "ndjson");
+    let sanitized = std::fs::read_to_string(sanitized_path).expect("read sanitized");
+    assert!(!sanitized.contains("SECRET"));
+    assert!(sanitized.contains("{{PII.Test}}"));
+}
+
+#[test]
+fn mbox_malformed_separator_fails_closed() {
+    let input = TestDir::new("mbox_malformed_separator_input");
+    let mbox = concat!(
+        "From sender@example.com Sat Jan 01 00:00:00 2022\n",
+        "Subject: test\n",
+        "Content-Type: text/plain; charset=utf-8\n",
+        "\n",
+        "hello\n",
+        "From not-a-real-separator\n",
+        "world\n",
+    );
+    std::fs::write(input.join("a.mbox"), mbox).expect("write a.mbox");
+
+    let policy = TestDir::new("mbox_malformed_separator_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("mbox_malformed_separator_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+    let recs = read_quarantine_index(output.path());
+    let rec = recs
+        .iter()
+        .find(|r| {
+            r.source_locator_hash == veil_domain::hash_source_locator_hash("a.mbox").to_string()
+        })
+        .expect("find quarantine record");
+    assert_eq!(rec.reason_code, "PARSE_ERROR");
+}
+
+#[test]
+fn mbox_multiple_messages_are_sanitized_deterministically() {
+    let input = TestDir::new("mbox_multi_message_input");
+    let mbox = concat!(
+        "From sender1@example.com Sat Jan 01 00:00:00 2022\n",
+        "Subject: first\n",
+        "Content-Type: text/plain; charset=utf-8\n",
+        "\n",
+        "SECRET\n",
+        "From sender2@example.com Sun Jan 02 00:00:00 2022\n",
+        "Subject: second\n",
+        "Content-Type: text/plain; charset=utf-8\n",
+        "\n",
+        "still safe\n",
+    );
+    std::fs::write(input.join("a.mbox"), mbox).expect("write a.mbox");
+
+    let policy = TestDir::new("mbox_multi_message_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    let output = TestDir::new("mbox_multi_message_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(0));
+
+    let sanitized_path =
+        expected_sanitized_path(output.path(), "a.mbox", mbox.as_bytes(), "ndjson");
+    let sanitized = std::fs::read_to_string(sanitized_path).expect("read sanitized");
+    assert!(!sanitized.contains("SECRET"));
+    assert!(sanitized.contains(r#""message_index":0"#));
+    assert!(sanitized.contains(r#""message_index":1"#));
+    assert!(sanitized.contains("first"));
+    assert!(sanitized.contains("second"));
+}
+
+#[test]
 fn eml_unsupported_attachment_quarantines() {
     let input = TestDir::new("eml_bad_attach_input");
 

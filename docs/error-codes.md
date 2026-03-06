@@ -18,7 +18,7 @@ VeilPack emits structured JSON logs on stderr. `reason_code` is part of the stab
 | `LIMIT_EXCEEDED` | Safety limit exceeded (size, expansion, runtime limit) |
 | `UNSAFE_PATH` | Unsafe path/symlink/traversal detected |
 | `UNKNOWN_COVERAGE` | Extractor emitted coverage with unknown surface status |
-| `VERIFICATION_FAILED` | Residual verification detected remaining sensitive content |
+| `VERIFICATION_FAILED` | Verification detected remaining sensitive content or an output identity mismatch |
 | `INTERNAL_ERROR` | Internal processing failure for a specific artifact |
 
 ## Stability Guard

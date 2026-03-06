@@ -5,6 +5,9 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::args::require_value;
+use crate::fs_safety::ensure_existing_file_safe;
+
 #[derive(Debug)]
 struct ExtractWorkerArgs {
     artifact_type: String,
@@ -60,7 +63,7 @@ pub(super) fn cmd_extract_worker(args: &[String]) -> ExitCode {
         Err(_) => return ExitCode::from(super::EXIT_FATAL),
     };
 
-    if super::ensure_existing_file_safe(&parsed.artifact_path, "artifact").is_err() {
+    if ensure_existing_file_safe(&parsed.artifact_path, "artifact").is_err() {
         return ExitCode::from(super::EXIT_FATAL);
     }
 
@@ -117,7 +120,7 @@ fn parse_extract_worker_args(args: &[String]) -> Result<ExtractWorkerArgs, Strin
         match flag {
             "--artifact-type" => {
                 i += 1;
-                let raw: PathBuf = super::require_value(args, i, "--artifact-type")?;
+                let raw: PathBuf = require_value(args, i, "--artifact-type")?;
                 artifact_type = Some(
                     raw.to_str()
                         .ok_or_else(|| "invalid artifact-type (redacted)".to_string())?
@@ -126,7 +129,7 @@ fn parse_extract_worker_args(args: &[String]) -> Result<ExtractWorkerArgs, Strin
             }
             "--artifact" => {
                 i += 1;
-                artifact_path = Some(super::require_value(args, i, "--artifact")?);
+                artifact_path = Some(require_value(args, i, "--artifact")?);
             }
             "--max-nested-archive-depth" => {
                 i += 1;
@@ -192,7 +195,7 @@ fn parse_extract_worker_args(args: &[String]) -> Result<ExtractWorkerArgs, Strin
 }
 
 fn parse_u32_cli_arg(args: &[String], i: usize, flag: &str) -> Result<u32, String> {
-    let raw: PathBuf = super::require_value(args, i, flag)?;
+    let raw: PathBuf = require_value(args, i, flag)?;
     let raw = raw
         .to_str()
         .ok_or_else(|| format!("{flag} must be a positive integer"))?;
@@ -206,7 +209,7 @@ fn parse_u32_cli_arg(args: &[String], i: usize, flag: &str) -> Result<u32, Strin
 }
 
 fn parse_u64_cli_arg(args: &[String], i: usize, flag: &str) -> Result<u64, String> {
-    let raw: PathBuf = super::require_value(args, i, flag)?;
+    let raw: PathBuf = require_value(args, i, flag)?;
     let raw = raw
         .to_str()
         .ok_or_else(|| format!("{flag} must be a positive integer"))?;

@@ -821,6 +821,7 @@ name = "veil-transform"
 version = "0.1.0"
 dependencies = [
  "csv",
+ "regex",
  "serde_json",
  "veil-detect",
  "veil-domain",

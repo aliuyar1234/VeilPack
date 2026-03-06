@@ -218,7 +218,8 @@ fn walk_json(
     match value {
         Value::Object(map) => {
             for (k, v) in map.iter() {
-                // Always scan keys (fail-closed: transformers do not rewrite keys in v1).
+                // Always scan keys. v1 keeps JSON object keys stable through transform,
+                // so residual verification can evaluate the same key paths.
                 let escaped = json_pointer_escape(k);
                 let mut key_pointer = String::with_capacity(pointer.len() + escaped.len() + 1);
                 key_pointer.push_str(pointer);

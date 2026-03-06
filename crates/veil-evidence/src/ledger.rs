@@ -20,6 +20,18 @@ pub enum LedgerError {
 pub struct ArtifactSummary {
     pub state: ArtifactState,
     pub quarantine_reason_code: Option<String>,
+    pub output_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArtifactRecord {
+    pub artifact_id: ArtifactId,
+    pub source_locator_hash: SourceLocatorHash,
+    pub size_bytes: u64,
+    pub artifact_type: String,
+    pub state: ArtifactState,
+    pub quarantine_reason_code: Option<String>,
+    pub output_id: Option<String>,
 }
 
 pub struct Ledger {
@@ -133,7 +145,9 @@ COMMIT;
     ) -> Result<Option<ArtifactSummary>, LedgerError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT state, quarantine_reason_code FROM artifacts WHERE artifact_id = ?1")
+            .prepare(
+                "SELECT state, quarantine_reason_code, output_id FROM artifacts WHERE artifact_id = ?1",
+            )
             .map_err(|_| LedgerError::Sql)?;
 
         let mut rows = stmt
@@ -148,10 +162,76 @@ COMMIT;
         let quarantine_reason_code = row
             .get::<_, Option<String>>(1)
             .map_err(|_| LedgerError::Sql)?;
+        let output_id = row
+            .get::<_, Option<String>>(2)
+            .map_err(|_| LedgerError::Sql)?;
         Ok(Some(ArtifactSummary {
             state,
             quarantine_reason_code,
+            output_id,
         }))
+    }
+
+    pub fn artifact_records(&self) -> Result<Vec<ArtifactRecord>, LedgerError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                r#"
+SELECT artifact_id, source_locator_hash, size_bytes, artifact_type, state, quarantine_reason_code, output_id
+FROM artifacts
+ORDER BY artifact_id
+"#,
+            )
+            .map_err(|_| LedgerError::Sql)?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let artifact_id = row.get::<_, String>(0)?;
+                let source_locator_hash = row.get::<_, String>(1)?;
+                let size_bytes = row.get::<_, i64>(2)?;
+                let artifact_type = row.get::<_, String>(3)?;
+                let raw_state = row.get::<_, String>(4)?;
+                let quarantine_reason_code = row.get::<_, Option<String>>(5)?;
+                let output_id = row.get::<_, Option<String>>(6)?;
+                Ok((
+                    artifact_id,
+                    source_locator_hash,
+                    size_bytes,
+                    artifact_type,
+                    raw_state,
+                    quarantine_reason_code,
+                    output_id,
+                ))
+            })
+            .map_err(|_| LedgerError::Sql)?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (
+                artifact_id,
+                source_locator_hash,
+                size_bytes,
+                artifact_type,
+                raw_state,
+                quarantine_reason_code,
+                output_id,
+            ) = row.map_err(|_| LedgerError::Sql)?;
+            let artifact_id = ArtifactId::from_hex(&artifact_id).map_err(|_| LedgerError::Sql)?;
+            let source_locator_hash =
+                SourceLocatorHash::from_hex(&source_locator_hash).map_err(|_| LedgerError::Sql)?;
+            let state = parse_artifact_state(&raw_state).ok_or(LedgerError::Sql)?;
+            let size_bytes = u64::try_from(size_bytes).map_err(|_| LedgerError::Sql)?;
+            out.push(ArtifactRecord {
+                artifact_id,
+                source_locator_hash,
+                size_bytes,
+                artifact_type,
+                state,
+                quarantine_reason_code,
+                output_id,
+            });
+        }
+        Ok(out)
     }
 
     pub fn quarantine_artifact(

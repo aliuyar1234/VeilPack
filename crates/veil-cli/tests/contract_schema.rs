@@ -98,6 +98,7 @@ struct ArtifactEvidenceRecordV1 {
     artifact_type: String,
     state: String,
     quarantine_reason_code: Option<String>,
+    output_id: Option<String>,
     #[serde(default)]
     proof_tokens: Vec<String>,
 }
@@ -194,8 +195,10 @@ fn evidence_ndjson_schema_v1_is_stable() {
         assert!(rec.state == "VERIFIED" || rec.state == "QUARANTINED");
         if rec.state == "VERIFIED" {
             assert!(rec.quarantine_reason_code.is_none());
+            assert!(rec.output_id.is_some());
         } else {
             assert!(rec.quarantine_reason_code.is_some());
+            assert!(rec.output_id.is_none());
         }
         let _ = rec.proof_tokens.len();
     }

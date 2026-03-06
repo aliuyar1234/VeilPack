@@ -207,7 +207,6 @@ fn transform_json_value(
     match value {
         Value::Object(map) => {
             let mut new_map = serde_json::Map::new();
-            let mut used_keys = BTreeSet::<String>::new();
 
             for (k, mut v) in std::mem::take(map) {
                 let escaped = json_pointer_escape(&k);
@@ -215,39 +214,10 @@ fn transform_json_value(
                 pointer.push('/');
                 pointer.push_str(&escaped);
 
-                let mut new_key = k.clone();
-                for class in policy.classes.iter() {
-                    if let Some(set) = selected_by_class.get(&class.class_id)
-                        && !set.contains(pointer)
-                    {
-                        continue;
-                    }
-                    let spans = collect_match_spans(class, &new_key);
-                    if spans.is_empty() {
-                        continue;
-                    }
-                    new_key = apply_action(&new_key, &class.action, &class.class_id, &spans);
-                }
-
-                // Ensure keys remain unique deterministically.
-                if !used_keys.insert(new_key.clone()) {
-                    let base = new_key.clone();
-                    let mut n = 1_u32;
-                    loop {
-                        let candidate = format!("{base}__dup{n}");
-                        if used_keys.insert(candidate.clone()) {
-                            new_key = candidate;
-                            break;
-                        }
-                        n += 1;
-                        if n > 10_000 {
-                            return Err(());
-                        }
-                    }
-                }
-
                 transform_json_value(policy, selected_by_class, pointer, &mut v)?;
-                new_map.insert(new_key, v);
+                // v1 keeps JSON object keys stable so selector semantics remain
+                // identical across detect, transform, and residual verify.
+                new_map.insert(k, v);
                 pointer.truncate(old_len);
             }
 
@@ -391,4 +361,47 @@ fn json_pointer_escape(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use veil_domain::{Digest32, PolicyId, Severity};
+    use veil_policy::{CompiledDetector, FieldSelector, FieldSelectorKind, Policy, PolicyClass};
+
+    fn dummy_policy_id() -> PolicyId {
+        PolicyId::from_digest(Digest32::from_bytes([9_u8; 32]))
+    }
+
+    #[test]
+    fn transform_json_keeps_keys_stable() {
+        let policy = Policy {
+            policy_id: dummy_policy_id(),
+            classes: vec![PolicyClass {
+                class_id: "PII.Test".to_string(),
+                severity: Severity::High,
+                detectors: vec![CompiledDetector::Regex(
+                    regex::Regex::new("SECRET7?").unwrap(),
+                )],
+                action: Action::Mask { keep_last: 6 },
+                field_selector: Some(FieldSelector {
+                    kind: FieldSelectorKind::JsonPointer,
+                    fields: vec!["/SECRET7".to_string()],
+                }),
+            }],
+        };
+
+        let canonical = CanonicalArtifact::Json(veil_extract::CanonicalJson {
+            value: serde_json::json!({ "SECRET7": "SECRET" }),
+        });
+
+        let out = TransformerV1.transform(&policy, &canonical);
+        let TransformOutcome::Transformed { sanitized_bytes } = out else {
+            panic!("expected transformed output");
+        };
+        let json: serde_json::Value =
+            serde_json::from_slice(&sanitized_bytes).expect("parse sanitized json");
+        let obj = json.as_object().expect("json object");
+        assert!(obj.contains_key("SECRET7"));
+    }
 }

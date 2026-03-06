@@ -939,7 +939,7 @@ fn extract_mbox_entries(
     limits: ArchiveLimits,
     bytes: &[u8],
 ) -> Result<(Vec<serde_json::Value>, bool), QuarantineReasonCode> {
-    let messages = split_mbox_messages(bytes);
+    let messages = split_mbox_messages(bytes)?;
 
     let mut out = Vec::<serde_json::Value>::new();
     let mut any_attachments = false;
@@ -1111,25 +1111,44 @@ fn collect_mail_leaf_parts(
     Ok(())
 }
 
-fn split_mbox_messages(bytes: &[u8]) -> Vec<&[u8]> {
+fn split_mbox_messages(bytes: &[u8]) -> Result<Vec<&[u8]>, QuarantineReasonCode> {
     // If no mbox separators exist, treat the whole file as one message.
     let mut starts = Vec::<usize>::new();
     if bytes.starts_with(b"From ") {
+        let first_line_end = bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .unwrap_or(bytes.len());
+        if !is_valid_mbox_separator_line(&bytes[..first_line_end]) {
+            return Err(QuarantineReasonCode::ParseError);
+        }
         starts.push(0);
     }
 
-    let mut i = 0;
-    while i + 6 <= bytes.len() {
-        if bytes[i] == b'\n' && bytes[i + 1..].starts_with(b"From ") {
-            starts.push(i + 1);
-            i += 6;
-            continue;
+    let mut line_start = 0_usize;
+    while line_start < bytes.len() {
+        let line_end = bytes[line_start..]
+            .iter()
+            .position(|b| *b == b'\n')
+            .map(|rel| line_start + rel)
+            .unwrap_or(bytes.len());
+        let line = &bytes[line_start..line_end];
+
+        if line_start > 0 && line.starts_with(b"From ") {
+            if !is_valid_mbox_separator_line(line) {
+                return Err(QuarantineReasonCode::ParseError);
+            }
+            starts.push(line_start);
         }
-        i += 1;
+
+        if line_end == bytes.len() {
+            break;
+        }
+        line_start = line_end + 1;
     }
 
     if starts.is_empty() {
-        return vec![bytes];
+        return Ok(vec![bytes]);
     }
 
     let mut out = Vec::<&[u8]>::new();
@@ -1151,7 +1170,84 @@ fn split_mbox_messages(bytes: &[u8]) -> Vec<&[u8]> {
         }
     }
 
-    out
+    Ok(out)
+}
+
+fn is_valid_mbox_separator_line(line: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(line) else {
+        return false;
+    };
+    let mut parts = text.split_whitespace();
+    if parts.next() != Some("From") {
+        return false;
+    }
+
+    let Some(_sender) = parts.next() else {
+        return false;
+    };
+    let Some(day_name) = parts.next() else {
+        return false;
+    };
+    let Some(month_name) = parts.next() else {
+        return false;
+    };
+    let Some(day_of_month) = parts.next() else {
+        return false;
+    };
+    let Some(time_of_day) = parts.next() else {
+        return false;
+    };
+    let Some(year) = parts.next() else {
+        return false;
+    };
+
+    if !matches!(
+        day_name,
+        "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun"
+    ) {
+        return false;
+    }
+    if !matches!(
+        month_name,
+        "Jan"
+            | "Feb"
+            | "Mar"
+            | "Apr"
+            | "May"
+            | "Jun"
+            | "Jul"
+            | "Aug"
+            | "Sep"
+            | "Oct"
+            | "Nov"
+            | "Dec"
+    ) {
+        return false;
+    }
+    if day_of_month
+        .parse::<u32>()
+        .map_or(true, |day| !(1..=31).contains(&day))
+    {
+        return false;
+    }
+    if !is_valid_mbox_time(time_of_day) {
+        return false;
+    }
+    if year.len() != 4 || !year.chars().all(|ch| ch.is_ascii_digit()) {
+        return false;
+    }
+
+    true
+}
+
+fn is_valid_mbox_time(value: &str) -> bool {
+    let parts = value.split(':').collect::<Vec<_>>();
+    if !(parts.len() == 2 || parts.len() == 3) {
+        return false;
+    }
+    parts
+        .iter()
+        .all(|part| part.len() == 2 && part.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 fn read_zip_index<'a>(

@@ -32,6 +32,34 @@ fn minimal_policy_json(detector_pattern: &str) -> String {
     )
 }
 
+fn json_pointer_policy_json(detector_pattern: &str, selector: &str, action_json: &str) -> String {
+    format!(
+        r#"{{
+  "schema_version": "policy.v1",
+  "classes": [
+    {{
+      "class_id": "PII.Test",
+      "severity": "HIGH",
+      "detectors": [
+        {{
+          "kind": "field_selector",
+          "selector": "json_pointer",
+          "fields": ["{selector}"]
+        }},
+        {{
+          "kind": "regex",
+          "pattern": "{detector_pattern}"
+        }}
+      ],
+      "action": {action_json}
+    }}
+  ],
+  "defaults": {{}},
+  "scopes": []
+}}"#
+    )
+}
+
 struct TestDir {
     path: PathBuf,
 }
@@ -557,4 +585,44 @@ fn run_never_persists_secret_key_plaintext() {
     assert_eq!(run_manifest.tokenization_scope.as_deref(), Some("PER_RUN"));
     assert_eq!(run_manifest.proof_scope, "PER_RUN");
     assert!(!run_manifest.proof_key_commitment.trim().is_empty());
+}
+
+#[test]
+fn json_pointer_selected_key_cannot_bypass_residual_verification() {
+    let input = TestDir::new("json_pointer_key_bypass_input");
+    std::fs::write(input.join("a.json"), r#"{"SECRET7":"SECRET"}"#).expect("write input file");
+
+    let policy = TestDir::new("json_pointer_key_bypass_policy");
+    std::fs::write(
+        policy.join("policy.json"),
+        json_pointer_policy_json(
+            "SECRET7?",
+            "/SECRET7",
+            r#"{ "kind": "MASK", "keep_last": 6 }"#,
+        ),
+    )
+    .expect("write policy.json");
+
+    let output = TestDir::new("json_pointer_key_bypass_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+
+    assert_eq!(out.status.code(), Some(2));
+
+    let quarantine_index =
+        std::fs::read_to_string(output.join("quarantine").join("index.ndjson")).unwrap();
+    assert!(quarantine_index.contains("VERIFICATION_FAILED"));
+
+    let has_any_file = std::fs::read_dir(output.join("sanitized"))
+        .unwrap()
+        .any(|e| e.unwrap().path().is_file());
+    assert!(!has_any_file, "sanitized should be empty");
 }

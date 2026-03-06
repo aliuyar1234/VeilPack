@@ -84,11 +84,12 @@ flowchart LR
 3. Detect sensitive findings using compiled policy detectors.
 4. Apply transforms (for example `REDACT`, `MASK`, `DROP`).
 5. Re-scan transformed output (residual verification).
-6. Emit `VERIFIED` outputs only when residual checks pass; otherwise quarantine.
+6. Emit `VERIFIED` outputs only when residual checks find no remaining policy matches; otherwise quarantine.
 7. Persist evidence and manifests with no plaintext sensitive values.
 
 ### Terminal state model
 - `VERIFIED`: artifact passed strict coverage and residual verification.
+- `VERIFIED`: artifact passed strict coverage, residual verification, and output identity recording.
 - `QUARANTINED`: artifact is withheld with a non-sensitive reason code.
 
 ## Supported Input Formats
@@ -181,6 +182,8 @@ cargo run -p veil-cli -- verify \
   --pack ./out \
   --policy ./policy
 ```
+
+`veil verify` re-checks both sanitized output identity and residual policy cleanliness for every verified artifact.
 
 ### Lint a policy bundle
 ```bash

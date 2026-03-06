@@ -275,5 +275,8 @@ Cargo.toml
 ```
 
 ## Project Notes
+- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Security reporting: [SECURITY.md](SECURITY.md)
+- Tagged releases are published by the GitHub Actions `Release` workflow.
 - This repository is licensed under Apache License 2.0 (`LICENSE`).
 - Internal SSOT/session documentation is intentionally kept local and out of the implementation repository history.

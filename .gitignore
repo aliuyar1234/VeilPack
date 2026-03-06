@@ -5,6 +5,7 @@
 .veil_work/
 .idea/
 .vscode/
+dist/
 
 # Local-only SSOT/session docs (keep out of implementation repo)
 AGENTS.md

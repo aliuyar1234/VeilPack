@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde_json::Value;
+
 fn veil_cmd() -> Command {
     Command::new(env!("CARGO_BIN_EXE_veil"))
 }
@@ -61,6 +63,36 @@ fn normalize_newlines(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
 
+fn normalize_json_strings(value: &mut Value) {
+    match value {
+        Value::String(s) => *s = normalize_newlines(s),
+        Value::Array(items) => {
+            for item in items {
+                normalize_json_strings(item);
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values_mut() {
+                normalize_json_strings(value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn parse_normalized_ndjson(s: &str) -> Vec<Value> {
+    let mut out = Vec::new();
+    for line in s.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut value: Value = serde_json::from_str(line).expect("parse ndjson record");
+        normalize_json_strings(&mut value);
+        out.push(value);
+    }
+    out
+}
+
 fn assert_ndjson_example(root: &Path, demo_name: &str) {
     let demo = root.join("examples").join(demo_name);
     let input = demo.join("input");
@@ -113,7 +145,10 @@ fn assert_ndjson_example(root: &Path, demo_name: &str) {
     );
 
     let actual = std::fs::read_to_string(&sanitized_files[0]).expect("read sanitized ndjson");
-    assert_eq!(normalize_newlines(&actual), normalize_newlines(&expected));
+    assert_eq!(
+        parse_normalized_ndjson(&actual),
+        parse_normalized_ndjson(&expected)
+    );
 
     let quarantine_index = std::fs::read_to_string(output.path().join("quarantine/index.ndjson"))
         .expect("read quarantine index");

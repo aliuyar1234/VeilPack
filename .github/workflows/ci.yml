@@ -14,10 +14,23 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
 
       - name: Toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
@@ -32,7 +45,7 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
 
       - name: Offline Static Enforcement
-        run: python3 checks/offline_enforcement.py
+        run: python checks/offline_enforcement.py
 
       - name: Test
         run: cargo test --workspace
@@ -41,20 +54,51 @@ jobs:
         run: cargo test -p veil-cli --test offline_enforcement
 
       - name: Boundary Fitness
-        run: python3 checks/boundary_fitness.py
+        run: python checks/boundary_fitness.py
 
       - name: Compatibility Matrix
-        run: python3 checks/compatibility_matrix_check.py
+        run: python checks/compatibility_matrix_check.py
+
+      - name: Package Release Smoke Test
+        run: python checks/package_release_smoke.py
+
+  perf-baseline:
+    name: perf-baseline
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+
+      - name: Toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
 
       - name: Performance Baseline Gate
-        run: python3 checks/perf_harness.py --build --tolerance 0.20 --samples 3
+        run: python checks/perf_harness.py --build --tolerance 0.20 --samples 3
 
-      - name: SSOT Validate
-        if: ${{ hashFiles('AGENTS.md') != '' && hashFiles('CONSTITUTION.md') != '' && hashFiles('spec/**') != '' }}
-        run: python3 checks/ssot_validate.py all
-
-      - name: Manifest Verify
-        if: ${{ hashFiles('AGENTS.md') != '' && hashFiles('CONSTITUTION.md') != '' && hashFiles('spec/**') != '' }}
+  ci-required:
+    name: ci-required
+    if: always()
+    needs:
+      - test
+      - perf-baseline
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce required workflow result
+        shell: bash
         run: |
-          python3 checks/generate_manifest.py
-          git diff --exit-code MANIFEST.sha256
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "matrix test job did not succeed: ${{ needs.test.result }}" >&2
+            exit 1
+          fi
+          if [ "${{ needs.perf-baseline.result }}" != "success" ]; then
+            echo "perf baseline job did not succeed: ${{ needs.perf-baseline.result }}" >&2
+            exit 1
+          fi

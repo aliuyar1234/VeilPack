@@ -12,13 +12,17 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      checks: read
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
+      sha: ${{ steps.commit.outputs.sha }}
     steps:
       - name: Resolve tag
         id: meta
@@ -45,6 +49,28 @@ jobs:
         shell: bash
         run: git rev-parse "refs/tags/${{ steps.meta.outputs.tag }}"
 
+      - name: Resolve tagged commit
+        id: commit
+        shell: bash
+        run: echo "sha=$(git rev-list -n 1 "${{ steps.meta.outputs.tag }}")" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tagged commit passed required CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        shell: bash
+        run: |
+          ok="$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
+            -H "Accept: application/vnd.github+json" \
+            --jq 'any(.check_runs[]?; .name == "ci-required" and .conclusion == "success")')"
+          if [ "$ok" != "true" ]; then
+            echo "tagged commit $SHA does not have a successful ci-required check" >&2
+            gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
+              -H "Accept: application/vnd.github+json" \
+              --jq '.check_runs[]? | {name, status, conclusion, details_url}'
+            exit 1
+          fi
+
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -67,6 +93,10 @@ jobs:
           - macos-latest
           - windows-latest
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -90,6 +120,15 @@ jobs:
       - name: Package release assets
         shell: bash
         run: python scripts/package_release.py --tag "${{ needs.prepare.outputs.tag }}"
+
+      - name: Smoke packaged release artifact
+        shell: bash
+        run: python checks/release_artifact_smoke.py --tag "${{ needs.prepare.outputs.tag }}"
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: "dist/*"
 
       - name: Upload assets to GitHub release
         env:

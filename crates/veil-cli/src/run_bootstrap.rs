@@ -15,6 +15,9 @@ use crate::logging::{LogContext, UNKNOWN_LOG_ID, log_error, log_info, log_warn};
 use crate::runtime_limits::RuntimeLimits;
 use crate::{EXIT_FATAL, print_run_help};
 
+// bootstrap_run owns the run-level invariants before artifact processing starts:
+// policy identity, corpus identity, proof key derivation, pack directory layout,
+// and safe resume semantics.
 pub(crate) struct RunContext {
     pub(crate) parsed: RunArgs,
     pub(crate) runtime_limits: RuntimeLimits,
@@ -95,16 +98,7 @@ pub(crate) fn bootstrap_run(
 ) -> Result<BootstrappedRun, ExitCode> {
     let archive_limits = runtime_limits.archive_limits;
 
-    let policy = match veil_policy::load_policy_bundle(&parsed.policy) {
-        Ok(p) => p,
-        Err(_) => {
-            return Err(exit_usage(
-                exe,
-                "policy bundle is invalid or unreadable (redacted)",
-                print_run_help,
-            ));
-        }
-    };
+    let policy = load_policy_or_exit(exe, &parsed.policy)?;
     let policy_id = policy.policy_id;
 
     let workdir = parsed
@@ -178,18 +172,7 @@ pub(crate) fn bootstrap_run(
     let log_ctx = LogContext::new(&run_id_str, &policy_id_str);
 
     let requested_workers = parsed.max_workers.unwrap_or(1);
-    let mut run_start_counters = BTreeMap::<&str, u64>::new();
-    run_start_counters.insert("artifacts_discovered", artifacts.len() as u64);
-    run_start_counters.insert("max_workers_requested", u64::from(requested_workers));
-    log_info(log_ctx, "run_started", Some(run_start_counters));
-    if requested_workers > 1 {
-        log_warn(
-            log_ctx,
-            "max_workers_single_threaded_baseline",
-            "CONFIG_IGNORED",
-            Some("v1 baseline executes deterministically with a single worker"),
-        );
-    }
+    log_run_start(log_ctx, artifacts.len(), requested_workers);
 
     let is_resume = std::fs::metadata(&marker_path)
         .map(|m| m.is_file())
@@ -198,16 +181,12 @@ pub(crate) fn bootstrap_run(
     let evidence_dir = parsed.output.join("evidence");
     let ledger_path = evidence_dir.join("ledger.sqlite3");
 
-    if is_resume {
-        let raw_dir = parsed.output.join("quarantine").join("raw");
-        let raw_present = raw_dir.exists();
-        if raw_present != parsed.quarantine_copy {
-            return Err(exit_usage(
-                exe,
-                "cannot resume with different --quarantine-copy setting (redacted)",
-                print_run_help,
-            ));
-        }
+    if is_resume && !resume_quarantine_mode_matches(&parsed) {
+        return Err(exit_usage(
+            exe,
+            "cannot resume with different --quarantine-copy setting (redacted)",
+            print_run_help,
+        ));
     }
 
     if let Err(msg) = create_pack_dirs(&parsed.output, parsed.quarantine_copy) {
@@ -362,6 +341,36 @@ pub(crate) fn bootstrap_run(
         proof_tokens_by_artifact,
         workdir_bytes_observed,
     })
+}
+
+fn load_policy_or_exit(exe: &str, policy_dir: &Path) -> Result<veil_policy::Policy, ExitCode> {
+    veil_policy::load_policy_bundle(policy_dir).map_err(|_| {
+        exit_usage(
+            exe,
+            "policy bundle is invalid or unreadable (redacted)",
+            print_run_help,
+        )
+    })
+}
+
+fn log_run_start(log_ctx: LogContext<'_>, artifacts_discovered: usize, requested_workers: u32) {
+    let mut run_start_counters = BTreeMap::<&str, u64>::new();
+    run_start_counters.insert("artifacts_discovered", artifacts_discovered as u64);
+    run_start_counters.insert("max_workers_requested", u64::from(requested_workers));
+    log_info(log_ctx, "run_started", Some(run_start_counters));
+    if requested_workers > 1 {
+        log_warn(
+            log_ctx,
+            "max_workers_single_threaded_baseline",
+            "CONFIG_IGNORED",
+            Some("v1 baseline executes deterministically with a single worker"),
+        );
+    }
+}
+
+fn resume_quarantine_mode_matches(parsed: &RunArgs) -> bool {
+    let raw_dir = parsed.output.join("quarantine").join("raw");
+    raw_dir.exists() == parsed.quarantine_copy
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -555,4 +564,80 @@ fn validate_resume_identity(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(name: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("veil-cli-{name}-{}-{unique}", std::process::id()));
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn test_run_args(output: &Path, quarantine_copy: bool) -> RunArgs {
+        RunArgs {
+            input: PathBuf::from("input"),
+            output: output.to_path_buf(),
+            policy: PathBuf::from("policy"),
+            workdir: None,
+            max_workers: None,
+            strictness: None,
+            enable_tokenization: false,
+            secret_key_file: None,
+            quarantine_copy,
+            isolate_risky_extractors: false,
+            limits_json: None,
+        }
+    }
+
+    #[test]
+    fn resume_quarantine_mode_matches_raw_dir_presence() {
+        let output = TempDirGuard::new("resume-quarantine-mode");
+
+        let args_without_copy = test_run_args(output.path(), false);
+        assert!(resume_quarantine_mode_matches(&args_without_copy));
+
+        let raw_dir = output.path().join("quarantine").join("raw");
+        std::fs::create_dir_all(&raw_dir).expect("create quarantine raw dir");
+
+        let args_with_copy = test_run_args(output.path(), true);
+        assert!(resume_quarantine_mode_matches(&args_with_copy));
+
+        assert!(!resume_quarantine_mode_matches(&args_without_copy));
+
+        let missing_raw = TempDirGuard::new("resume-quarantine-mode-missing-raw");
+        let args_missing_raw = test_run_args(missing_raw.path(), true);
+        assert!(!resume_quarantine_mode_matches(&args_missing_raw));
+    }
+
+    #[test]
+    fn load_policy_or_exit_returns_usage_for_missing_bundle() {
+        let missing_policy_dir = TempDirGuard::new("missing-policy").path().join("policy");
+        let err = load_policy_or_exit("veil", &missing_policy_dir).expect_err("missing policy");
+        assert_eq!(err, ExitCode::from(crate::EXIT_USAGE));
+    }
 }

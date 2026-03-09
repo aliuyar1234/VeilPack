@@ -6,7 +6,15 @@ use veil_domain::{Digest32, Severity};
 use veil_extract::{
     CanonicalArtifact, CanonicalCsv, CanonicalJson, CanonicalNdjson, CanonicalText,
 };
-use veil_policy::{CompiledDetector, FieldSelectorKind, Policy, PolicyClass};
+use veil_policy::{CompiledDetector, Policy, PolicyClass};
+
+mod matching;
+
+pub use matching::{
+    StructuredSelector, class_applies, collect_match_spans, csv_selected_columns,
+    find_luhn_candidate_spans, json_pointer_escape, json_pointer_matches_class,
+    json_pointer_selection,
+};
 
 const PROOF_TOKEN_DOMAIN: &[u8] = b"veil.proof.v1";
 
@@ -51,78 +59,6 @@ impl DetectorEngine for DetectorEngineV1 {
     }
 }
 
-pub fn csv_selected_columns(policy: &Policy, c: &CanonicalCsv) -> BTreeMap<String, Vec<u32>> {
-    let mut by_class = BTreeMap::<String, Vec<u32>>::new();
-
-    for class in &policy.classes {
-        let Some(sel) = &class.field_selector else {
-            continue;
-        };
-        if sel.kind != FieldSelectorKind::CsvHeader {
-            continue;
-        }
-
-        let mut cols = Vec::<u32>::new();
-        for field in &sel.fields {
-            for (idx, header) in c.headers.iter().enumerate() {
-                if header == field {
-                    cols.push(idx as u32);
-                }
-            }
-        }
-        cols.sort();
-        cols.dedup();
-        by_class.insert(class.class_id.clone(), cols);
-    }
-
-    by_class
-}
-
-pub fn json_pointer_selection(policy: &Policy) -> BTreeMap<String, BTreeSet<String>> {
-    let mut by_class = BTreeMap::<String, BTreeSet<String>>::new();
-
-    for class in &policy.classes {
-        let Some(sel) = &class.field_selector else {
-            continue;
-        };
-        if sel.kind != FieldSelectorKind::JsonPointer {
-            continue;
-        }
-
-        let set = sel.fields.iter().cloned().collect::<BTreeSet<_>>();
-        by_class.insert(class.class_id.clone(), set);
-    }
-
-    by_class
-}
-
-pub fn find_luhn_candidate_spans(s: &str) -> Vec<(usize, usize)> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::<(usize, usize)>::new();
-
-    let mut span_start = None::<usize>;
-    for (i, b) in bytes.iter().copied().enumerate() {
-        let is_candidate = b.is_ascii_digit() || b == b' ' || b == b'-';
-        if is_candidate {
-            if span_start.is_none() {
-                span_start = Some(i);
-            }
-            continue;
-        }
-
-        if let Some(start) = span_start.take() {
-            let end = i;
-            maybe_push_luhn_candidate(s, start, end, &mut out);
-        }
-    }
-
-    if let Some(start) = span_start {
-        maybe_push_luhn_candidate(s, start, bytes.len(), &mut out);
-    }
-
-    out
-}
-
 fn detect_text(policy: &Policy, t: &CanonicalText, proof_key: Option<&[u8; 32]>) -> Vec<Finding> {
     let mut out = Vec::new();
     let text = t.as_str();
@@ -144,12 +80,13 @@ fn detect_csv(policy: &Policy, c: &CanonicalCsv, proof_key: Option<&[u8; 32]>) -
 
     for (col_idx, header) in c.headers.iter().enumerate() {
         for class in policy.classes.iter() {
-            let selected = selected_cols_by_class
-                .get(&class.class_id)
-                .map(|v| v.as_slice());
-            if let Some(cols) = selected
-                && !cols.contains(&(col_idx as u32))
-            {
+            if !class_applies(
+                Some(StructuredSelector::CsvColumn(
+                    col_idx as u32,
+                    &selected_cols_by_class,
+                )),
+                class,
+            ) {
                 continue;
             }
 
@@ -165,13 +102,14 @@ fn detect_csv(policy: &Policy, c: &CanonicalCsv, proof_key: Option<&[u8; 32]>) -
 
     for (row_idx, row) in c.records.iter().enumerate() {
         for class in policy.classes.iter() {
-            let selected = selected_cols_by_class
-                .get(&class.class_id)
-                .map(|v| v.as_slice());
             for (col_idx, cell) in row.iter().enumerate() {
-                if let Some(cols) = selected
-                    && !cols.contains(&(col_idx as u32))
-                {
+                if !class_applies(
+                    Some(StructuredSelector::CsvColumn(
+                        col_idx as u32,
+                        &selected_cols_by_class,
+                    )),
+                    class,
+                ) {
                     continue;
                 }
 
@@ -226,9 +164,7 @@ fn walk_json(
                 key_pointer.push('/');
                 key_pointer.push_str(&escaped);
                 for class in policy.classes.iter() {
-                    if let Some(set) = selected_by_class.get(&class.class_id)
-                        && !set.contains(&key_pointer)
-                    {
+                    if !json_pointer_matches_class(class, selected_by_class, &key_pointer) {
                         continue;
                     }
                     detect_in_str(
@@ -271,9 +207,7 @@ fn walk_json(
         }
         Value::String(s) => {
             for class in policy.classes.iter() {
-                if let Some(set) = selected_by_class.get(&class.class_id)
-                    && !set.contains(pointer)
-                {
+                if !json_pointer_matches_class(class, selected_by_class, pointer) {
                     continue;
                 }
 
@@ -375,50 +309,6 @@ fn compute_proof_token(key: &[u8; 32], value: &[u8]) -> String {
     let digest = hasher.finalize();
     let hex = digest.to_hex().to_string();
     hex[..12].to_string()
-}
-
-fn maybe_push_luhn_candidate(s: &str, start: usize, end: usize, out: &mut Vec<(usize, usize)>) {
-    let raw = &s[start..end];
-    let digits = raw
-        .bytes()
-        .filter(|b| b.is_ascii_digit())
-        .collect::<Vec<_>>();
-    if digits.len() < 13 || digits.len() > 19 {
-        return;
-    }
-    if !luhn_checksum_ok(&digits) {
-        return;
-    }
-    out.push((start, end));
-}
-
-fn luhn_checksum_ok(digits: &[u8]) -> bool {
-    let mut sum = 0_u32;
-    let mut double = false;
-    for d in digits.iter().rev() {
-        let mut v = (d - b'0') as u32;
-        if double {
-            v *= 2;
-            if v > 9 {
-                v -= 9;
-            }
-        }
-        sum += v;
-        double = !double;
-    }
-    sum.is_multiple_of(10)
-}
-
-fn json_pointer_escape(s: &str) -> String {
-    let mut out = String::new();
-    for ch in s.chars() {
-        match ch {
-            '~' => out.push_str("~0"),
-            '/' => out.push_str("~1"),
-            _ => out.push(ch),
-        }
-    }
-    out
 }
 
 fn hash_locator(locator: &str) -> String {

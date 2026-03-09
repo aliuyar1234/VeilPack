@@ -15,6 +15,9 @@ use crate::fs_safety::{
 use crate::logging::{LogContext, log_artifact_error, log_error, log_info};
 use crate::{EXIT_FATAL, EXIT_OK, EXIT_QUARANTINED, PACK_SCHEMA_VERSION};
 
+// PackVerifier is the pack-integrity gate for `veil verify`.
+// It owns pack-manifest loading, evidence reconciliation, output identity checks,
+// and residual rescanning. Any mismatch fails closed.
 pub(crate) enum PackVerifyResult {
     Exit(ExitCode),
     Usage(String),
@@ -186,28 +189,7 @@ impl<'a> PackVerifier<'a> {
     }
 
     fn load_validate_evidence(&self) -> Result<LoadedEvidence, ExitCode> {
-        let ledger_path = self.pack_root.join("evidence").join("ledger.sqlite3");
-        if ensure_existing_file_safe(&ledger_path, "ledger").is_err() {
-            log_error(
-                self.log_ctx(),
-                "verify_ledger_unsafe",
-                "INTERNAL_ERROR",
-                Some("ledger.sqlite3 path is unsafe (redacted)"),
-            );
-            return Err(ExitCode::from(EXIT_FATAL));
-        }
-        let ledger = match veil_evidence::Ledger::open_existing(&ledger_path) {
-            Ok(v) => v,
-            Err(_) => {
-                log_error(
-                    self.log_ctx(),
-                    "verify_ledger_open_failed",
-                    "INTERNAL_ERROR",
-                    Some("could not open ledger.sqlite3 (redacted)"),
-                );
-                return Err(ExitCode::from(EXIT_FATAL));
-            }
-        };
+        let ledger = self.open_existing_ledger()?;
         if !self.metadata_matches(&ledger) {
             log_error(
                 self.log_ctx(),
@@ -218,28 +200,7 @@ impl<'a> PackVerifier<'a> {
             return Err(ExitCode::from(EXIT_FATAL));
         }
 
-        let artifacts_path = self.pack_root.join("evidence").join("artifacts.ndjson");
-        if ensure_existing_file_safe(&artifacts_path, "artifacts evidence").is_err() {
-            log_error(
-                self.log_ctx(),
-                "verify_artifacts_evidence_unsafe",
-                "INTERNAL_ERROR",
-                Some("artifacts.ndjson path is unsafe (redacted)"),
-            );
-            return Err(ExitCode::from(EXIT_FATAL));
-        }
-        let artifacts_file = match std::fs::File::open(&artifacts_path) {
-            Ok(f) => f,
-            Err(_) => {
-                log_error(
-                    self.log_ctx(),
-                    "verify_artifacts_evidence_read_failed",
-                    "INTERNAL_ERROR",
-                    Some("could not read artifacts.ndjson (redacted)"),
-                );
-                return Err(ExitCode::from(EXIT_FATAL));
-            }
-        };
+        let artifacts_file = self.open_artifacts_evidence_file()?;
         let reader = std::io::BufReader::new(artifacts_file);
 
         let mut evidence_by_artifact = BTreeMap::<String, ArtifactEvidenceRecordOwned>::new();
@@ -311,6 +272,52 @@ impl<'a> PackVerifier<'a> {
         Ok(LoadedEvidence {
             ledger,
             evidence_by_artifact,
+        })
+    }
+
+    fn open_existing_ledger(&self) -> Result<veil_evidence::Ledger, ExitCode> {
+        let ledger_path = self.pack_root.join("evidence").join("ledger.sqlite3");
+        if ensure_existing_file_safe(&ledger_path, "ledger").is_err() {
+            log_error(
+                self.log_ctx(),
+                "verify_ledger_unsafe",
+                "INTERNAL_ERROR",
+                Some("ledger.sqlite3 path is unsafe (redacted)"),
+            );
+            return Err(ExitCode::from(EXIT_FATAL));
+        }
+
+        veil_evidence::Ledger::open_existing(&ledger_path).map_err(|_| {
+            log_error(
+                self.log_ctx(),
+                "verify_ledger_open_failed",
+                "INTERNAL_ERROR",
+                Some("could not open ledger.sqlite3 (redacted)"),
+            );
+            ExitCode::from(EXIT_FATAL)
+        })
+    }
+
+    fn open_artifacts_evidence_file(&self) -> Result<std::fs::File, ExitCode> {
+        let artifacts_path = self.pack_root.join("evidence").join("artifacts.ndjson");
+        if ensure_existing_file_safe(&artifacts_path, "artifacts evidence").is_err() {
+            log_error(
+                self.log_ctx(),
+                "verify_artifacts_evidence_unsafe",
+                "INTERNAL_ERROR",
+                Some("artifacts.ndjson path is unsafe (redacted)"),
+            );
+            return Err(ExitCode::from(EXIT_FATAL));
+        }
+
+        std::fs::File::open(&artifacts_path).map_err(|_| {
+            log_error(
+                self.log_ctx(),
+                "verify_artifacts_evidence_read_failed",
+                "INTERNAL_ERROR",
+                Some("could not read artifacts.ndjson (redacted)"),
+            );
+            ExitCode::from(EXIT_FATAL)
         })
     }
 
@@ -562,5 +569,88 @@ impl<'a> PackVerifier<'a> {
             Some(pack_manifest) => LogContext::new(&pack_manifest.run_id, &pack_manifest.policy_id),
             None => LogContext::unknown(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use veil_domain::{Digest32, PolicyId};
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(name: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("veil-cli-{name}-{}-{unique}", std::process::id()));
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn dummy_policy() -> veil_policy::Policy {
+        veil_policy::Policy {
+            policy_id: PolicyId::from_digest(Digest32::from_bytes([0x11; 32])),
+            classes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn load_pack_manifest_rejects_missing_tokenization_scope_when_enabled() {
+        let pack_root = TempDirGuard::new("verify-pack-manifest");
+        let manifest_path = pack_root.path().join("pack_manifest.json");
+        let manifest = serde_json::json!({
+            "pack_schema_version": PACK_SCHEMA_VERSION,
+            "tool_version": "0.1.0",
+            "run_id": "run-1",
+            "policy_id": "policy-1",
+            "input_corpus_id": "input-1",
+            "tokenization_enabled": true,
+            "quarantine_copy_enabled": false,
+            "ledger_schema_version": veil_evidence::LEDGER_SCHEMA_VERSION
+        });
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let policy = dummy_policy();
+        let verifier = PackVerifier::new(pack_root.path(), &policy);
+        let err = verifier
+            .load_pack_manifest()
+            .expect_err("missing tokenization scope must fail closed");
+
+        assert_eq!(err, ExitCode::from(crate::EXIT_FATAL));
+    }
+
+    #[test]
+    fn open_artifacts_evidence_file_rejects_missing_ndjson() {
+        let pack_root = TempDirGuard::new("verify-artifacts-ndjson");
+        let policy = dummy_policy();
+        let verifier = PackVerifier::new(pack_root.path(), &policy);
+
+        let err = verifier
+            .open_artifacts_evidence_file()
+            .expect_err("missing artifacts evidence must fail closed");
+
+        assert_eq!(err, ExitCode::from(crate::EXIT_FATAL));
     }
 }

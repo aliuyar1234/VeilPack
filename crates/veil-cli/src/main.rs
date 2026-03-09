@@ -10,6 +10,7 @@ mod args;
 mod artifact_processor;
 mod evidence_io;
 mod extract_worker;
+mod extract_worker_protocol;
 mod fs_safety;
 mod input_inventory;
 mod logging;
@@ -135,7 +136,7 @@ fn print_run_help(exe: &str) {
     println!("OPTIONAL:");
     println!("  --workdir <PATH>               Work directory (default: <output>/.veil_work/)");
     println!(
-        "  --max-workers <N>              Worker bound (>= 1; v1 baseline executes single-worker deterministically)"
+        "  --max-workers <N>              Worker bound (>= 1; values > 1 log CONFIG_IGNORED and still execute single-worker deterministically)"
     );
     println!("  --strictness strict            Strict is the only supported baseline in v1");
     println!("  --enable-tokenization true|false   Default: false");

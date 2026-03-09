@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import pathlib
+import shutil
 import subprocess
 import zipfile
 
@@ -28,16 +29,22 @@ def file_sha256(path: pathlib.Path) -> str:
     return hasher.hexdigest()
 
 
+def prepare_dist_dir(root: pathlib.Path) -> pathlib.Path:
+    dist = root / "dist"
+    # Clear the whole release staging directory so uploads never pick up stale assets.
+    if dist.exists():
+        shutil.rmtree(dist)
+    dist.mkdir(parents=True, exist_ok=True)
+    return dist
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", required=True, help="Release tag, e.g. v1.0.0")
     args = parser.parse_args()
 
     root = workspace_root()
-    dist = root / "dist"
-    if dist.exists():
-        shutil.rmtree(dist)
-    dist.mkdir(parents=True, exist_ok=True)
+    dist = prepare_dist_dir(root)
 
     host = rust_host_triple()
     exe_name = "veil.exe" if (root / "target" / "release" / "veil.exe").exists() else "veil"

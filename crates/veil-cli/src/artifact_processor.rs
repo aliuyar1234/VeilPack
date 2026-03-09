@@ -20,6 +20,9 @@ use crate::input_inventory::{
 use crate::logging::{log_artifact_error, log_error};
 use crate::run_bootstrap::{RunContext, RunPaths};
 
+// ArtifactProcessor owns the per-artifact fail-closed state machine.
+// The invariant is simple: every discovered artifact must end the phase as
+// VERIFIED, QUARANTINED, or an immediate fatal error.
 pub(crate) enum ArtifactProcessStatus {
     SkippedTerminal,
     Verified,
@@ -54,46 +57,7 @@ impl<'a> ArtifactProcessor<'a> {
         &mut self,
         artifact: &DiscoveredArtifact,
     ) -> Result<ArtifactProcessStatus, ExitCode> {
-        if self
-            .ledger
-            .upsert_discovered(
-                &artifact.sort_key.artifact_id,
-                &artifact.sort_key.source_locator_hash,
-                artifact.size_bytes,
-                &artifact.artifact_type,
-            )
-            .is_err()
-        {
-            log_error(
-                self.context.log_ctx(),
-                "ledger_write_failed",
-                "INTERNAL_ERROR",
-                Some("ledger write failed (redacted)"),
-            );
-            return Err(ExitCode::from(EXIT_FATAL));
-        }
-
-        let state = match self.ledger.artifact_summary(&artifact.sort_key.artifact_id) {
-            Ok(Some(s)) => s.state,
-            Ok(None) => {
-                log_error(
-                    self.context.log_ctx(),
-                    "ledger_missing_artifact_record",
-                    "INTERNAL_ERROR",
-                    Some("ledger missing artifact record (redacted)"),
-                );
-                return Err(ExitCode::from(EXIT_FATAL));
-            }
-            Err(_) => {
-                log_error(
-                    self.context.log_ctx(),
-                    "ledger_read_failed",
-                    "INTERNAL_ERROR",
-                    Some("ledger read failed (redacted)"),
-                );
-                return Err(ExitCode::from(EXIT_FATAL));
-            }
-        };
+        let state = self.upsert_discovered_and_get_state(artifact)?;
         if state.is_terminal() {
             return Ok(ArtifactProcessStatus::SkippedTerminal);
         }
@@ -114,6 +78,78 @@ impl<'a> ArtifactProcessor<'a> {
             return Ok(ArtifactProcessStatus::Quarantined);
         }
 
+        self.mark_extracted_or_exit(artifact, &extracted)?;
+
+        self.detect(artifact, &extracted.canonical)?;
+
+        let Some(sanitized_bytes) = self.transform(artifact, &bytes, &extracted.canonical)? else {
+            return Ok(ArtifactProcessStatus::Quarantined);
+        };
+
+        self.mark_transformed_or_exit(artifact)?;
+
+        if !self.reverify(artifact, &bytes, &sanitized_bytes)? {
+            return Ok(ArtifactProcessStatus::Quarantined);
+        }
+
+        if !self.commit_verified_output(artifact, &bytes, &sanitized_bytes, artifact_started)? {
+            return Ok(ArtifactProcessStatus::Quarantined);
+        }
+
+        Ok(ArtifactProcessStatus::Verified)
+    }
+
+    fn upsert_discovered_and_get_state(
+        &mut self,
+        artifact: &DiscoveredArtifact,
+    ) -> Result<veil_domain::ArtifactState, ExitCode> {
+        if self
+            .ledger
+            .upsert_discovered(
+                &artifact.sort_key.artifact_id,
+                &artifact.sort_key.source_locator_hash,
+                artifact.size_bytes,
+                &artifact.artifact_type,
+            )
+            .is_err()
+        {
+            log_error(
+                self.context.log_ctx(),
+                "ledger_write_failed",
+                "INTERNAL_ERROR",
+                Some("ledger write failed (redacted)"),
+            );
+            return Err(ExitCode::from(EXIT_FATAL));
+        }
+
+        match self.ledger.artifact_summary(&artifact.sort_key.artifact_id) {
+            Ok(Some(s)) => Ok(s.state),
+            Ok(None) => {
+                log_error(
+                    self.context.log_ctx(),
+                    "ledger_missing_artifact_record",
+                    "INTERNAL_ERROR",
+                    Some("ledger missing artifact record (redacted)"),
+                );
+                Err(ExitCode::from(EXIT_FATAL))
+            }
+            Err(_) => {
+                log_error(
+                    self.context.log_ctx(),
+                    "ledger_read_failed",
+                    "INTERNAL_ERROR",
+                    Some("ledger read failed (redacted)"),
+                );
+                Err(ExitCode::from(EXIT_FATAL))
+            }
+        }
+    }
+
+    fn mark_extracted_or_exit(
+        &mut self,
+        artifact: &DiscoveredArtifact,
+        extracted: &ExtractedArtifact,
+    ) -> Result<(), ExitCode> {
         if self
             .ledger
             .mark_extracted(
@@ -131,13 +167,10 @@ impl<'a> ArtifactProcessor<'a> {
             );
             return Err(ExitCode::from(EXIT_FATAL));
         }
+        Ok(())
+    }
 
-        self.detect(artifact, &extracted.canonical)?;
-
-        let Some(sanitized_bytes) = self.transform(artifact, &bytes, &extracted.canonical)? else {
-            return Ok(ArtifactProcessStatus::Quarantined);
-        };
-
+    fn mark_transformed_or_exit(&mut self, artifact: &DiscoveredArtifact) -> Result<(), ExitCode> {
         if self
             .ledger
             .mark_transformed(&artifact.sort_key.artifact_id)
@@ -151,16 +184,7 @@ impl<'a> ArtifactProcessor<'a> {
             );
             return Err(ExitCode::from(EXIT_FATAL));
         }
-
-        if !self.reverify(artifact, &bytes, &sanitized_bytes)? {
-            return Ok(ArtifactProcessStatus::Quarantined);
-        }
-
-        if !self.commit_verified_output(artifact, &bytes, &sanitized_bytes, artifact_started)? {
-            return Ok(ArtifactProcessStatus::Quarantined);
-        }
-
-        Ok(ArtifactProcessStatus::Verified)
+        Ok(())
     }
 
     fn load_bytes(&mut self, artifact: &DiscoveredArtifact) -> Result<Option<Vec<u8>>, ExitCode> {

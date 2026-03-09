@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
-
 use crate::args::require_value;
+use crate::extract_worker_protocol::{
+    ExtractWorkerResponse, extract_outcome_from_worker_response,
+    extract_outcome_to_worker_response, limit_exceeded_response,
+};
 use crate::fs_safety::ensure_existing_file_safe;
 
 #[derive(Debug)]
@@ -13,48 +15,6 @@ struct ExtractWorkerArgs {
     artifact_type: String,
     artifact_path: PathBuf,
     archive_limits: veil_domain::ArchiveLimits,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
-enum WorkerCanonicalArtifact {
-    Text {
-        text: String,
-    },
-    Csv {
-        delimiter: u8,
-        headers: Vec<String>,
-        records: Vec<Vec<String>>,
-    },
-    Json {
-        value: serde_json::Value,
-    },
-    Ndjson {
-        values: Vec<serde_json::Value>,
-    },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct WorkerCoverageMap {
-    content_text: String,
-    structured_fields: String,
-    metadata: String,
-    embedded_objects: String,
-    attachments: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "SCREAMING_SNAKE_CASE")]
-enum ExtractWorkerResponse {
-    Extracted {
-        extractor_id: String,
-        canonical: WorkerCanonicalArtifact,
-        coverage: WorkerCoverageMap,
-    },
-    Quarantined {
-        extractor_id: Option<String>,
-        reason_code: String,
-    },
 }
 
 pub(super) fn cmd_extract_worker(args: &[String]) -> ExitCode {
@@ -73,16 +33,7 @@ pub(super) fn cmd_extract_worker(args: &[String]) -> ExitCode {
     };
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > parsed.archive_limits.max_bytes_per_artifact
     {
-        let response = ExtractWorkerResponse::Quarantined {
-            extractor_id: None,
-            reason_code: veil_domain::QuarantineReasonCode::LimitExceeded
-                .as_str()
-                .to_string(),
-        };
-        if serde_json::to_writer(std::io::stdout(), &response).is_err() {
-            return ExitCode::from(super::EXIT_FATAL);
-        }
-        return ExitCode::from(super::EXIT_OK);
+        return write_worker_response(&limit_exceeded_response());
     }
 
     let artifact_id = veil_domain::hash_artifact_id(&bytes);
@@ -99,10 +50,7 @@ pub(super) fn cmd_extract_worker(args: &[String]) -> ExitCode {
         &bytes,
     );
     let response = extract_outcome_to_worker_response(outcome);
-    if serde_json::to_writer(std::io::stdout(), &response).is_err() {
-        return ExitCode::from(super::EXIT_FATAL);
-    }
-    ExitCode::from(super::EXIT_OK)
+    write_worker_response(&response)
 }
 
 fn parse_extract_worker_args(args: &[String]) -> Result<ExtractWorkerArgs, String> {
@@ -222,176 +170,6 @@ fn parse_u64_cli_arg(args: &[String], i: usize, flag: &str) -> Result<u64, Strin
     Ok(parsed)
 }
 
-fn extract_outcome_to_worker_response(
-    outcome: veil_extract::ExtractOutcome,
-) -> ExtractWorkerResponse {
-    match outcome {
-        veil_extract::ExtractOutcome::Extracted {
-            extractor_id,
-            canonical,
-            coverage,
-        } => ExtractWorkerResponse::Extracted {
-            extractor_id: extractor_id.to_string(),
-            canonical: canonical_to_worker(canonical),
-            coverage: coverage_to_worker(coverage),
-        },
-        veil_extract::ExtractOutcome::Quarantined {
-            extractor_id,
-            reason,
-        } => ExtractWorkerResponse::Quarantined {
-            extractor_id: extractor_id.map(str::to_string),
-            reason_code: reason.as_str().to_string(),
-        },
-    }
-}
-
-fn extract_outcome_from_worker_response(
-    response: ExtractWorkerResponse,
-) -> Result<veil_extract::ExtractOutcome, String> {
-    match response {
-        ExtractWorkerResponse::Extracted {
-            extractor_id,
-            canonical,
-            coverage,
-        } => {
-            let extractor_id = extractor_id_from_wire(&extractor_id)
-                .ok_or_else(|| "worker returned unknown extractor_id (redacted)".to_string())?;
-            let canonical = canonical_from_worker(canonical).ok_or_else(|| {
-                "worker returned invalid canonical payload (redacted)".to_string()
-            })?;
-            let coverage = coverage_from_worker(coverage)
-                .ok_or_else(|| "worker returned invalid coverage payload (redacted)".to_string())?;
-            Ok(veil_extract::ExtractOutcome::Extracted {
-                extractor_id,
-                canonical,
-                coverage,
-            })
-        }
-        ExtractWorkerResponse::Quarantined {
-            extractor_id,
-            reason_code,
-        } => {
-            let reason = quarantine_reason_from_code(&reason_code)
-                .ok_or_else(|| "worker returned invalid reason_code (redacted)".to_string())?;
-            let extractor_id = match extractor_id {
-                Some(v) => Some(extractor_id_from_wire(&v).ok_or_else(|| {
-                    "worker returned unknown extractor_id (redacted)".to_string()
-                })?),
-                None => None,
-            };
-            Ok(veil_extract::ExtractOutcome::Quarantined {
-                extractor_id,
-                reason,
-            })
-        }
-    }
-}
-
-fn canonical_to_worker(canonical: veil_extract::CanonicalArtifact) -> WorkerCanonicalArtifact {
-    match canonical {
-        veil_extract::CanonicalArtifact::Text(v) => WorkerCanonicalArtifact::Text {
-            text: v.as_str().to_string(),
-        },
-        veil_extract::CanonicalArtifact::Csv(v) => WorkerCanonicalArtifact::Csv {
-            delimiter: v.delimiter,
-            headers: v.headers,
-            records: v.records,
-        },
-        veil_extract::CanonicalArtifact::Json(v) => {
-            WorkerCanonicalArtifact::Json { value: v.value }
-        }
-        veil_extract::CanonicalArtifact::Ndjson(v) => {
-            WorkerCanonicalArtifact::Ndjson { values: v.values }
-        }
-    }
-}
-
-fn canonical_from_worker(
-    canonical: WorkerCanonicalArtifact,
-) -> Option<veil_extract::CanonicalArtifact> {
-    Some(match canonical {
-        WorkerCanonicalArtifact::Text { text } => {
-            veil_extract::CanonicalArtifact::Text(veil_extract::CanonicalText::new(text))
-        }
-        WorkerCanonicalArtifact::Csv {
-            delimiter,
-            headers,
-            records,
-        } => veil_extract::CanonicalArtifact::Csv(veil_extract::CanonicalCsv {
-            delimiter,
-            headers,
-            records,
-        }),
-        WorkerCanonicalArtifact::Json { value } => {
-            veil_extract::CanonicalArtifact::Json(veil_extract::CanonicalJson { value })
-        }
-        WorkerCanonicalArtifact::Ndjson { values } => {
-            veil_extract::CanonicalArtifact::Ndjson(veil_extract::CanonicalNdjson { values })
-        }
-    })
-}
-
-fn coverage_to_worker(coverage: veil_domain::CoverageMapV1) -> WorkerCoverageMap {
-    WorkerCoverageMap {
-        content_text: coverage.content_text.as_str().to_string(),
-        structured_fields: coverage.structured_fields.as_str().to_string(),
-        metadata: coverage.metadata.as_str().to_string(),
-        embedded_objects: coverage.embedded_objects.as_str().to_string(),
-        attachments: coverage.attachments.as_str().to_string(),
-    }
-}
-
-fn coverage_from_worker(coverage: WorkerCoverageMap) -> Option<veil_domain::CoverageMapV1> {
-    Some(veil_domain::CoverageMapV1 {
-        content_text: coverage_status_from_wire(&coverage.content_text)?,
-        structured_fields: coverage_status_from_wire(&coverage.structured_fields)?,
-        metadata: coverage_status_from_wire(&coverage.metadata)?,
-        embedded_objects: coverage_status_from_wire(&coverage.embedded_objects)?,
-        attachments: coverage_status_from_wire(&coverage.attachments)?,
-    })
-}
-
-fn coverage_status_from_wire(value: &str) -> Option<veil_domain::CoverageStatus> {
-    Some(match value {
-        "FULL" => veil_domain::CoverageStatus::Full,
-        "NONE" => veil_domain::CoverageStatus::None,
-        "UNKNOWN" => veil_domain::CoverageStatus::Unknown,
-        _ => return None,
-    })
-}
-
-fn quarantine_reason_from_code(value: &str) -> Option<veil_domain::QuarantineReasonCode> {
-    Some(match value {
-        "UNSUPPORTED_FORMAT" => veil_domain::QuarantineReasonCode::UnsupportedFormat,
-        "ENCRYPTED" => veil_domain::QuarantineReasonCode::Encrypted,
-        "PARSE_ERROR" => veil_domain::QuarantineReasonCode::ParseError,
-        "LIMIT_EXCEEDED" => veil_domain::QuarantineReasonCode::LimitExceeded,
-        "UNSAFE_PATH" => veil_domain::QuarantineReasonCode::UnsafePath,
-        "UNKNOWN_COVERAGE" => veil_domain::QuarantineReasonCode::UnknownCoverage,
-        "VERIFICATION_FAILED" => veil_domain::QuarantineReasonCode::VerificationFailed,
-        "INTERNAL_ERROR" => veil_domain::QuarantineReasonCode::InternalError,
-        _ => return None,
-    })
-}
-
-fn extractor_id_from_wire(value: &str) -> Option<&'static str> {
-    Some(match value {
-        "extract.text.v1" => "extract.text.v1",
-        "extract.csv.v1" => "extract.csv.v1",
-        "extract.tsv.v1" => "extract.tsv.v1",
-        "extract.json.v1" => "extract.json.v1",
-        "extract.ndjson.v1" => "extract.ndjson.v1",
-        "extract.zip.v1" => "extract.zip.v1",
-        "extract.tar.v1" => "extract.tar.v1",
-        "extract.eml.v1" => "extract.eml.v1",
-        "extract.mbox.v1" => "extract.mbox.v1",
-        "extract.ooxml.docx.v1" => "extract.ooxml.docx.v1",
-        "extract.ooxml.pptx.v1" => "extract.ooxml.pptx.v1",
-        "extract.ooxml.xlsx.v1" => "extract.ooxml.xlsx.v1",
-        _ => return None,
-    })
-}
-
 pub(super) fn is_risky_extractor_type(artifact_type: &str) -> bool {
     matches!(
         artifact_type,
@@ -461,4 +239,12 @@ pub(super) fn run_extract_in_worker(
     let response: ExtractWorkerResponse = serde_json::from_slice(&out)
         .map_err(|_| "extract worker output is invalid (redacted)".to_string())?;
     extract_outcome_from_worker_response(response)
+}
+
+fn write_worker_response(response: &ExtractWorkerResponse) -> ExitCode {
+    if serde_json::to_writer(std::io::stdout(), response).is_err() {
+        ExitCode::from(super::EXIT_FATAL)
+    } else {
+        ExitCode::from(super::EXIT_OK)
+    }
 }

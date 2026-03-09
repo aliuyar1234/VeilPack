@@ -166,7 +166,7 @@ Important `run` flags:
 - `--quarantine-copy true|false` to retain raw quarantined bytes under `quarantine/raw/`.
 - `--enable-tokenization true|false` with `--secret-key-file <PATH>` for opt-in tokenization.
 - `--strictness strict` because strict is the only supported baseline in `policy.v1`.
-- `--max-workers <N>` is accepted, but the current baseline still executes deterministically in single-worker mode.
+- `--max-workers <N>` is accepted, but values greater than `1` currently emit `CONFIG_IGNORED` and still execute deterministically in single-worker mode.
 
 ## What a Veil Pack contains
 
@@ -214,10 +214,11 @@ python checks/offline_enforcement.py
 cargo test -p veil-cli --test offline_enforcement
 python checks/boundary_fitness.py
 python checks/compatibility_matrix_check.py
+python checks/package_release_smoke.py
 python checks/perf_harness.py --build --tolerance 0.20 --samples 3
 ```
 
-Additional SSOT validation exists in `checks/ssot_validate.py` and is only active when the corresponding local SSOT/spec files are present.
+Optional SSOT helper tooling still exists in `checks/ssot_validate.py` and `checks/generate_manifest.py`, but the current VeilPack checkout does not ship the SSOT/spec document pack those tools expect, so they are not part of the default CI contract.
 
 ## Repository map
 
@@ -236,6 +237,7 @@ Additional SSOT validation exists in `checks/ssot_validate.py` and is only activ
 ## Docs and references
 
 - [Examples](examples/README.md)
+- [Operator guide](docs/operator-guide.md)
 - [Compatibility matrix](docs/compatibility-matrix.md)
 - [Error codes](docs/error-codes.md)
 - [Checks index](checks/CHECKS_INDEX.md)

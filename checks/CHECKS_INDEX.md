@@ -6,11 +6,18 @@ Each check defines: purpose, type, how to run, pass/fail, and where to record ev
 Default evidence recording location:
 - evidence: PROGRESS.md :: Evidence Recording Rules
 
+Current repo contract:
+- Only the checks under `Active Repo Checks` are part of the default VeilPack CI contract.
+- The checks under `Optional SSOT / Scaffold Checks` are support tooling carried over from the original SSOT-governed scaffold.
+- This checkout does not ship the full SSOT/spec document pack that those optional checks expect, so they are not run in CI.
+
 ---
+
+## Optional SSOT / Scaffold Checks
 
 ## CHK-MANIFEST-VERIFY
 - Purpose: ensure SSOT pack integrity; detect drift.
-- Type: automated
+- Type: optional support tooling
 - How to regenerate:
   - `python checks/generate_manifest.py`
 - How to run:
@@ -32,7 +39,7 @@ print('PASS' if ok else 'FAIL'); raise SystemExit(0 if ok else 1)"`
 
 ## CHK-FORBIDDEN-TERMS
 - Purpose: prevent thin docs and placeholder drift.
-- Type: automated
+- Type: optional support tooling
 - Scope: text source files in the repo (md/rs/py/toml/yml/yaml/gitignore), excluding ephemeral build/cache outputs (per D-0010) and checks/CHECKS_INDEX.md.
 - Forbidden placeholder tokens (literal list; canonical home):
   - TBD
@@ -66,7 +73,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 
 ## CHK-CORE-FILES
 - Purpose: verify required core files exist.
-- Type: manual
+- Type: optional SSOT-only support tooling
 - How to run:
   - Confirm all non-omittable core files are present per required ZIP structure.
   - Optional automation: `python checks/ssot_validate.py core-files`
@@ -79,7 +86,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 
 ## CHK-FINGERPRINT-MATRIX
 - Purpose: verify Spec Applicability Matrix matches filesystem.
-- Type: manual (automate later)
+- Type: optional SSOT-only support tooling
 - How to run:
   - Compare spec/00 matrix to actual files under spec/.
   - Ensure all APPLICABLE spec files exist and no NON-APPLICABLE files exist.
@@ -93,7 +100,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 
 ## CHK-SLOP-MAPPING
 - Purpose: ensure SB-0001..SB-0012 are present and mapped to enforcement in spec/11.
-- Type: manual
+- Type: optional SSOT-only support tooling
 - How to run:
   - Confirm spec/11 contains the SLOP Enforcement Mapping table with SB-0001..SB-0012.
   - Optional automation: `python checks/ssot_validate.py slop-mapping`
@@ -106,7 +113,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 
 ## CHK-EVIDENCE-POINTER-FORMAT
 - Purpose: ensure evidence pointers use the required syntax exactly.
-- Type: automated
+- Type: optional support tooling
 - How to run:
   - `python -c "import pathlib, re, sys; root=pathlib.Path('.'); pat=re.compile(r'evidence: ([^ ]+) :: ([^|\n\r]+)'); 
 ok=True
@@ -129,7 +136,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 ## CHK-REF-INTEGRITY
 
 - Purpose: prevent broken internal references (paths and IDs).
-- Type: manual (automate later)
+- Type: optional support tooling
 - How to run:
   1) For every evidence pointer (format described in CHK-EVIDENCE-POINTER-FORMAT):
      - confirm the referenced path exists
@@ -150,7 +157,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 
 ## CHK-NO-ADHOC-FILES
 - Purpose: ensure the pack contains only the canonical file tree.
-- Type: manual
+- Type: optional SSOT-only support tooling
 - How to run:
   - Confirm the repo contains only the expected source tree (SSOT spine + implementation scaffold), excluding ephemeral outputs per D-0010.
   - Expected top-level items include:
@@ -167,7 +174,7 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
 
 ## CHK-QAC-COVERAGE
 - Purpose: ensure Quality Attribute Profile rows map to at least one gate and gates exist.
-- Type: manual
+- Type: optional SSOT-only support tooling
 - How to run:
   - Confirm spec/00 quality profile lists gate IDs.
   - Confirm spec/11 defines those gate IDs.
@@ -178,6 +185,8 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
   - evidence: PROGRESS.md :: CHK-QAC-COVERAGE
 
 ---
+
+## Active Repo Checks
 
 ## CHK-BOUNDARY-FITNESS
 - Purpose: enforce dependency direction rules and prevent architecture erosion.
@@ -200,6 +209,18 @@ print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)"`
   - PASS if the compatibility matrix exists, includes the current supported version row, includes unsupported rows, and references regression tests.
 - Evidence:
   - evidence: PROGRESS.md :: CHK-COMPATIBILITY-MATRIX
+
+---
+
+## CHK-PACKAGE-RELEASE-SMOKE
+- Purpose: catch release asset packaging regressions before the tag-driven release workflow runs.
+- Type: automated (implemented in repo)
+- How to run:
+  - `python checks/package_release_smoke.py`
+- Pass/fail:
+  - PASS if the packager succeeds both when `dist/` is missing and when `dist/` already contains stale files.
+- Evidence:
+  - evidence: PROGRESS.md :: CHK-PACKAGE-RELEASE-SMOKE
 
 ---
 

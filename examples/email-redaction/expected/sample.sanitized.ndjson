@@ -1,0 +1,4 @@
+{"header_index":0,"key":"Subject","value":"hello {{PII.Secret}}"}
+{"header_index":1,"key":"From","value":"alice@example.com"}
+{"header_index":2,"key":"To","value":"bob@example.com"}
+{"body_index":0,"text":"Body {{PII.Secret}}\n"}

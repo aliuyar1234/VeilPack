@@ -9,6 +9,9 @@ VeilPack emits structured JSON logs on stderr. `reason_code` is part of the stab
 | `INTERNAL_ERROR` | Fatal runtime failure in processing, persistence, or verification path |
 | `CONFIG_IGNORED` | Non-fatal warning for accepted config that is not active in current baseline mode |
 
+Notes:
+- `CONFIG_IGNORED` currently covers advisory cases such as `--max-workers > 1`, where the v1 baseline still runs in deterministic single-worker mode.
+
 ## Artifact Quarantine Codes
 | reason_code | Meaning |
 |---|---|

@@ -26,6 +26,8 @@ python checks/boundary_fitness.py
 python checks/compatibility_matrix_check.py
 ```
 
+The current VeilPack checkout does not include the optional SSOT/spec document pack used by `checks/ssot_validate.py` and `checks/generate_manifest.py`, so those tools are not part of the default contributor workflow or CI gate for this repository.
+
 ## Before Opening a Pull Request
 
 Run the full local gate:

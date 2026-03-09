@@ -12,6 +12,20 @@ def fail(msg: str) -> None:
     raise SystemExit(1)
 
 
+def skip(msg: str) -> None:
+    print(msg)
+    raise SystemExit(0)
+
+
+def ssot_enabled() -> bool:
+    required_roots = [
+        ROOT / "AGENTS.md",
+        ROOT / "CONSTITUTION.md",
+        ROOT / "spec",
+    ]
+    return all(path.exists() for path in required_roots)
+
+
 def check_core_files() -> None:
     required_paths = [
         "README.md",
@@ -146,6 +160,11 @@ def main() -> int:
         choices=["core-files", "fingerprint-matrix", "slop-mapping", "qac-coverage", "all"],
     )
     args = ap.parse_args()
+
+    if not ssot_enabled():
+        skip(
+            "SKIP SSOT_NOT_ENABLED current checkout does not include the optional SSOT/spec governance pack"
+        )
 
     if args.check in ("core-files", "all"):
         check_core_files()

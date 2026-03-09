@@ -13,7 +13,7 @@ struct TestDir {
 
 impl TestDir {
     fn new(label: &str) -> Self {
-        let mut path = std::env::temp_dir();
+        let mut path = canonical_temp_root();
         path.push(format!(
             "veil_additional_demo_test_{}_{}",
             std::process::id(),
@@ -27,6 +27,18 @@ impl TestDir {
 
     fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+fn canonical_temp_root() -> PathBuf {
+    let path = std::env::temp_dir();
+    #[cfg(unix)]
+    {
+        std::fs::canonicalize(&path).unwrap_or(path)
+    }
+    #[cfg(not(unix))]
+    {
+        path
     }
 }
 

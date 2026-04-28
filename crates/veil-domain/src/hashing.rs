@@ -55,7 +55,7 @@ mod tests {
         let s1 = SourceLocatorHash::from_digest(Digest32::from_bytes([1_u8; 32]));
         let s2 = SourceLocatorHash::from_digest(Digest32::from_bytes([2_u8; 32]));
 
-        let mut keys = vec![
+        let mut keys = [
             ArtifactSortKey::new(a2, s1),
             ArtifactSortKey::new(a1, s2),
             ArtifactSortKey::new(a1, s1),

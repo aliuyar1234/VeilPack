@@ -7,16 +7,19 @@ use veil_extract::{
     CanonicalArtifact, CanonicalCsv, CanonicalJson, CanonicalNdjson, CanonicalText,
 };
 use veil_policy::{CompiledDetector, Policy, PolicyClass};
-
-mod matching;
-
-pub use matching::{
-    StructuredSelector, class_applies, collect_match_spans, csv_selected_columns,
-    find_luhn_candidate_spans, json_pointer_escape, json_pointer_matches_class,
-    json_pointer_selection,
+use veil_policy_eval::{
+    StructuredSelector, class_applies, csv_selected_columns, find_luhn_candidate_spans,
+    json_pointer_escape, json_pointer_matches_class, json_pointer_selection,
 };
 
-const PROOF_TOKEN_DOMAIN: &[u8] = b"veil.proof.v1";
+// Domain separation context for proof-token derivation. The string is
+// intentionally specific so that the derived key cannot be confused with
+// any other use of the same proof_key. v2 widens tokens from 12 hex chars
+// (48 bits) to the full 64 hex chars (256 bits) for collision resistance,
+// and uses `blake3::derive_key` for idiomatic domain separation rather
+// than feeding the domain as a data prefix.
+const PROOF_TOKEN_CONTEXT: &str = "VeilPack 2026 proof tokens v2";
+pub const PROOF_TOKEN_HEX_LEN: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct Finding {
@@ -303,12 +306,10 @@ fn digits_only(span: &str) -> Vec<u8> {
 }
 
 fn compute_proof_token(key: &[u8; 32], value: &[u8]) -> String {
-    let mut hasher = blake3::Hasher::new_keyed(key);
-    hasher.update(PROOF_TOKEN_DOMAIN);
+    let derived = blake3::derive_key(PROOF_TOKEN_CONTEXT, key);
+    let mut hasher = blake3::Hasher::new_keyed(&derived);
     hasher.update(value);
-    let digest = hasher.finalize();
-    let hex = digest.to_hex().to_string();
-    hex[..12].to_string()
+    hasher.finalize().to_hex().to_string()
 }
 
 fn hash_locator(locator: &str) -> String {

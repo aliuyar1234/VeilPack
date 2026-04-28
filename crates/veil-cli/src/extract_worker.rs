@@ -1,25 +1,54 @@
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
-use std::time::{Duration, Instant};
+use std::path::Path;
+use std::process::{Child, Command, ExitCode, Stdio};
+use std::time::Duration;
 
-use crate::args::require_value;
+use wait_timeout::ChildExt;
+
+use crate::error::AppError;
 use crate::extract_worker_protocol::{
-    ExtractWorkerResponse, extract_outcome_from_worker_response,
-    extract_outcome_to_worker_response, limit_exceeded_response,
+    WorkerEnvelope, extract_outcome_from_worker_envelope, extract_outcome_to_worker_envelope,
+    limit_exceeded_envelope, read_envelope, write_envelope,
 };
 use crate::fs_safety::ensure_existing_file_safe;
 
-#[derive(Debug)]
-struct ExtractWorkerArgs {
-    artifact_type: String,
-    artifact_path: PathBuf,
-    archive_limits: veil_domain::ArchiveLimits,
+#[derive(Debug, clap::Args)]
+pub(crate) struct ExtractWorkerArgs {
+    #[arg(long = "artifact-type")]
+    pub(crate) artifact_type: String,
+    #[arg(long = "artifact")]
+    pub(crate) artifact_path: std::path::PathBuf,
+    #[arg(long = "max-nested-archive-depth")]
+    pub(crate) max_nested_archive_depth: u32,
+    #[arg(long = "max-entries-per-archive")]
+    pub(crate) max_entries_per_archive: u32,
+    #[arg(long = "max-expansion-ratio")]
+    pub(crate) max_expansion_ratio: u32,
+    #[arg(long = "max-expanded-bytes-per-archive")]
+    pub(crate) max_expanded_bytes_per_archive: u64,
+    #[arg(long = "max-bytes-per-artifact")]
+    pub(crate) max_bytes_per_artifact: u64,
 }
 
-pub(super) fn cmd_extract_worker(args: &[String]) -> ExitCode {
-    let parsed = match parse_extract_worker_args(args) {
-        Ok(v) => v,
+pub(super) fn cmd_extract_worker(parsed: ExtractWorkerArgs) -> ExitCode {
+    if parsed.max_nested_archive_depth == 0
+        || parsed.max_entries_per_archive == 0
+        || parsed.max_expansion_ratio == 0
+        || parsed.max_expanded_bytes_per_archive == 0
+        || parsed.max_bytes_per_artifact == 0
+    {
+        return ExitCode::from(super::EXIT_FATAL);
+    }
+
+    let archive_limits = veil_domain::ArchiveLimits {
+        max_nested_archive_depth: parsed.max_nested_archive_depth,
+        max_entries_per_archive: parsed.max_entries_per_archive,
+        max_expansion_ratio: parsed.max_expansion_ratio,
+        max_expanded_bytes_per_archive: parsed.max_expanded_bytes_per_archive,
+        max_bytes_per_artifact: parsed.max_bytes_per_artifact,
+    };
+
+    let artifact_type = match veil_domain::ArtifactType::parse(&parsed.artifact_type) {
+        Ok(t) => t,
         Err(_) => return ExitCode::from(super::EXIT_FATAL),
     };
 
@@ -31,9 +60,8 @@ pub(super) fn cmd_extract_worker(args: &[String]) -> ExitCode {
         Ok(v) => v,
         Err(_) => return ExitCode::from(super::EXIT_FATAL),
     };
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > parsed.archive_limits.max_bytes_per_artifact
-    {
-        return write_worker_response(&limit_exceeded_response());
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > archive_limits.max_bytes_per_artifact {
+        return write_worker_envelope(&limit_exceeded_envelope());
     }
 
     let artifact_id = veil_domain::hash_artifact_id(&bytes);
@@ -44,151 +72,59 @@ pub(super) fn cmd_extract_worker(args: &[String]) -> ExitCode {
         source_locator_hash: &source_locator_hash,
     };
 
-    let outcome = veil_extract::ExtractorRegistry::new(parsed.archive_limits).extract_by_type(
-        &parsed.artifact_type,
-        ctx,
-        &bytes,
-    );
-    let response = extract_outcome_to_worker_response(outcome);
-    write_worker_response(&response)
+    let outcome =
+        veil_extract::ExtractorRegistry::new(archive_limits).extract(artifact_type, ctx, &bytes);
+    let envelope = extract_outcome_to_worker_envelope(outcome);
+    write_worker_envelope(&envelope)
 }
 
-fn parse_extract_worker_args(args: &[String]) -> Result<ExtractWorkerArgs, String> {
-    let mut artifact_type = None;
-    let mut artifact_path = None;
-    let mut max_nested_archive_depth = None;
-    let mut max_entries_per_archive = None;
-    let mut max_expansion_ratio = None;
-    let mut max_expanded_bytes_per_archive = None;
-    let mut max_bytes_per_artifact = None;
+/// RAII guard for a spawned worker child. If the parent panics or returns
+/// before `into_inner` is invoked, `Drop` kills the child and reaps it so
+/// no orphan worker survives. The explicit `into_inner` consumes the guard
+/// once the parent has finished reading the worker's envelope and observed
+/// a clean exit code, transferring ownership of the `Child` so the parent
+/// can call `wait_timeout` on it without the guard double-killing.
+struct ChildGuard {
+    child: Option<Child>,
+}
 
-    let mut i = 0;
-    while i < args.len() {
-        let flag = args[i].as_str();
-        match flag {
-            "--artifact-type" => {
-                i += 1;
-                let raw: PathBuf = require_value(args, i, "--artifact-type")?;
-                artifact_type = Some(
-                    raw.to_str()
-                        .ok_or_else(|| "invalid artifact-type (redacted)".to_string())?
-                        .to_string(),
-                );
-            }
-            "--artifact" => {
-                i += 1;
-                artifact_path = Some(require_value(args, i, "--artifact")?);
-            }
-            "--max-nested-archive-depth" => {
-                i += 1;
-                max_nested_archive_depth =
-                    Some(parse_u32_cli_arg(args, i, "--max-nested-archive-depth")?);
-            }
-            "--max-entries-per-archive" => {
-                i += 1;
-                max_entries_per_archive =
-                    Some(parse_u32_cli_arg(args, i, "--max-entries-per-archive")?);
-            }
-            "--max-expansion-ratio" => {
-                i += 1;
-                max_expansion_ratio = Some(parse_u32_cli_arg(args, i, "--max-expansion-ratio")?);
-            }
-            "--max-expanded-bytes-per-archive" => {
-                i += 1;
-                max_expanded_bytes_per_archive = Some(parse_u64_cli_arg(
-                    args,
-                    i,
-                    "--max-expanded-bytes-per-archive",
-                )?);
-            }
-            "--max-bytes-per-artifact" => {
-                i += 1;
-                max_bytes_per_artifact =
-                    Some(parse_u64_cli_arg(args, i, "--max-bytes-per-artifact")?);
-            }
-            unknown if unknown.starts_with("--") => {
-                let _ = unknown;
-                return Err("unknown extract-worker flag (redacted)".to_string());
-            }
-            _ => return Err("unexpected extract-worker argument (redacted)".to_string()),
+impl ChildGuard {
+    fn new(child: Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn as_mut(&mut self) -> &mut Child {
+        self.child
+            .as_mut()
+            .expect("ChildGuard child taken before drop")
+    }
+
+    fn into_inner(mut self) -> Child {
+        self.child.take().expect("ChildGuard child already taken")
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
         }
-        i += 1;
     }
-
-    let archive_limits = veil_domain::ArchiveLimits {
-        max_nested_archive_depth: max_nested_archive_depth
-            .ok_or_else(|| "missing max_nested_archive_depth".to_string())?,
-        max_entries_per_archive: max_entries_per_archive
-            .ok_or_else(|| "missing max_entries_per_archive".to_string())?,
-        max_expansion_ratio: max_expansion_ratio
-            .ok_or_else(|| "missing max_expansion_ratio".to_string())?,
-        max_expanded_bytes_per_archive: max_expanded_bytes_per_archive
-            .ok_or_else(|| "missing max_expanded_bytes_per_archive".to_string())?,
-        max_bytes_per_artifact: max_bytes_per_artifact
-            .ok_or_else(|| "missing max_bytes_per_artifact".to_string())?,
-    };
-
-    if archive_limits.max_expansion_ratio == 0
-        || archive_limits.max_expanded_bytes_per_archive == 0
-        || archive_limits.max_bytes_per_artifact == 0
-    {
-        return Err("extract-worker limits must be >= 1 (redacted)".to_string());
-    }
-
-    Ok(ExtractWorkerArgs {
-        artifact_type: artifact_type.ok_or_else(|| "missing artifact_type".to_string())?,
-        artifact_path: artifact_path.ok_or_else(|| "missing artifact".to_string())?,
-        archive_limits,
-    })
-}
-
-fn parse_u32_cli_arg(args: &[String], i: usize, flag: &str) -> Result<u32, String> {
-    let raw: PathBuf = require_value(args, i, flag)?;
-    let raw = raw
-        .to_str()
-        .ok_or_else(|| format!("{flag} must be a positive integer"))?;
-    let parsed = raw
-        .parse::<u32>()
-        .map_err(|_| format!("{flag} must be a positive integer"))?;
-    if parsed == 0 {
-        return Err(format!("{flag} must be >= 1"));
-    }
-    Ok(parsed)
-}
-
-fn parse_u64_cli_arg(args: &[String], i: usize, flag: &str) -> Result<u64, String> {
-    let raw: PathBuf = require_value(args, i, flag)?;
-    let raw = raw
-        .to_str()
-        .ok_or_else(|| format!("{flag} must be a positive integer"))?;
-    let parsed = raw
-        .parse::<u64>()
-        .map_err(|_| format!("{flag} must be a positive integer"))?;
-    if parsed == 0 {
-        return Err(format!("{flag} must be >= 1"));
-    }
-    Ok(parsed)
-}
-
-pub(super) fn is_risky_extractor_type(artifact_type: &str) -> bool {
-    matches!(
-        artifact_type,
-        "ZIP" | "TAR" | "EML" | "MBOX" | "DOCX" | "PPTX" | "XLSX"
-    )
 }
 
 pub(super) fn run_extract_in_worker(
     artifact_path: &Path,
-    artifact_type: &str,
+    artifact_type: veil_domain::ArtifactType,
     archive_limits: veil_domain::ArchiveLimits,
     max_processing_ms: u64,
-) -> Result<veil_extract::ExtractOutcome, String> {
+) -> Result<veil_extract::ExtractOutcome, AppError> {
     let exe = std::env::current_exe()
-        .map_err(|_| "could not resolve extract worker executable (redacted)".to_string())?;
-    let mut child = Command::new(exe)
+        .map_err(|_| AppError::Internal("worker_executable_resolution_failed".to_string()))?;
+    let child = Command::new(exe)
         .arg("extract-worker")
         .arg("--artifact-type")
-        .arg(artifact_type)
+        .arg(artifact_type.as_str())
         .arg("--artifact")
         .arg(artifact_path)
         .arg("--max-nested-archive-depth")
@@ -204,47 +140,55 @@ pub(super) fn run_extract_in_worker(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|_| "could not start extract worker (redacted)".to_string())?;
+        .map_err(|_| AppError::Internal("worker_spawn_failed".to_string()))?;
 
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "extract worker did not expose stdout (redacted)".to_string())?;
+    let mut guard = ChildGuard::new(child);
 
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|_| "extract worker wait failed (redacted)".to_string())?
-        {
-            break status;
+    // Wait for the worker bounded by max_processing_ms. wait_timeout reaps
+    // the child once it exits, so the parent never busy-polls.
+    let timeout = Duration::from_millis(max_processing_ms);
+    let status = match guard
+        .as_mut()
+        .wait_timeout(timeout)
+        .map_err(|_| AppError::Internal("worker_wait_failed".to_string()))?
+    {
+        Some(status) => status,
+        None => {
+            // ChildGuard::Drop will kill+reap on the way out.
+            return Err(AppError::Internal("worker_timeout".to_string()));
         }
-
-        if started.elapsed() > Duration::from_millis(max_processing_ms) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("extract worker timed out (redacted)".to_string());
-        }
-        std::thread::sleep(Duration::from_millis(10));
     };
-
-    let mut out = Vec::<u8>::new();
-    stdout
-        .read_to_end(&mut out)
-        .map_err(|_| "extract worker output could not be read (redacted)".to_string())?;
     if !status.success() {
-        return Err("extract worker failed (redacted)".to_string());
+        return Err(AppError::Internal("worker_failed".to_string()));
     }
 
-    let response: ExtractWorkerResponse = serde_json::from_slice(&out)
-        .map_err(|_| "extract worker output is invalid (redacted)".to_string())?;
-    extract_outcome_from_worker_response(response)
+    // Worker exited cleanly: read stdout while still under the guard,
+    // then explicitly wait. Clippy's `zombie_processes` lint requires
+    // `wait()` on every code path that owns the Child, including the
+    // early-return ones, so we do the read-and-decode while the guard
+    // still holds the Child and only `into_inner` once we know we are
+    // about to return successfully. (`wait_timeout` already reaped the
+    // child; the explicit wait is redundant but lint-required.)
+    let stdout_take = guard.as_mut().stdout.take();
+    let read_result = match stdout_take {
+        Some(mut stdout) => {
+            read_envelope(&mut stdout).and_then(extract_outcome_from_worker_envelope)
+        }
+        None => Err(AppError::Internal("worker_no_stdout".to_string())),
+    };
+    let mut child = guard.into_inner();
+    let _ = child.wait();
+    read_result
 }
 
-fn write_worker_response(response: &ExtractWorkerResponse) -> ExitCode {
-    if serde_json::to_writer(std::io::stdout(), response).is_err() {
-        ExitCode::from(super::EXIT_FATAL)
-    } else {
-        ExitCode::from(super::EXIT_OK)
+fn write_worker_envelope(envelope: &WorkerEnvelope) -> ExitCode {
+    let mut stdout = std::io::stdout().lock();
+    if write_envelope(&mut stdout, envelope).is_err() {
+        return ExitCode::from(super::EXIT_FATAL);
     }
+    use std::io::Write;
+    if stdout.flush().is_err() {
+        return ExitCode::from(super::EXIT_FATAL);
+    }
+    ExitCode::from(super::EXIT_OK)
 }

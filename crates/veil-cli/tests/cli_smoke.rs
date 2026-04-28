@@ -88,7 +88,10 @@ fn help_is_available() {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Veil"));
-    assert!(stdout.contains("USAGE:"));
+    // clap renders the usage banner as "Usage:" (not the legacy "USAGE:").
+    // Match case-insensitively so the assertion remains stable across
+    // future clap formatting tweaks.
+    assert!(stdout.to_ascii_lowercase().contains("usage:"));
 }
 
 #[test]
@@ -279,6 +282,10 @@ fn run_valid_args_produces_pack_with_quarantines() {
 
 #[test]
 fn run_accepts_max_workers_flag() {
+    // Phase 4 honors `--max-workers > 1` via a real worker pool. The
+    // legacy `max_workers_single_threaded_baseline` advisory has been
+    // retired; the flag is now reflected in the structured `run_started`
+    // event under `max_workers_requested`.
     let input = TestDir::new("max_workers_input");
     std::fs::write(input.join("a.txt"), "hello").expect("write input file");
 
@@ -302,8 +309,13 @@ fn run_accepts_max_workers_flag() {
     assert_eq!(out.status.code(), Some(0));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("\"event\":\"max_workers_single_threaded_baseline\""),
-        "expected advisory warning for max-workers>1"
+        !stderr.contains("\"event\":\"max_workers_single_threaded_baseline\""),
+        "deprecated CONFIG_IGNORED advisory must no longer be emitted"
+    );
+    assert!(
+        stderr.contains("\"event\":\"run_started\"")
+            && stderr.contains("\"max_workers_requested\":2"),
+        "run_started must record the requested worker count"
     );
 }
 

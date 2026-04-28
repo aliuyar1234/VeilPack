@@ -400,18 +400,48 @@ fn split_mbox_messages(bytes: &[u8]) -> Result<Vec<&[u8]>, QuarantineReasonCode>
     Ok(out)
 }
 
+// Strict mbox-O separator validation.
+//
+// Reference grammar (RFC 4155-style):
+//   "From " <addr-spec> " " <day> " " <mon> " " <dd> " " <hh:mm:ss> " " <yyyy>
+//
+// All separators are exactly one ASCII 0x20 (space). Any tab, NUL, CR, LF, or
+// non-ASCII byte in the separator line is rejected. `split_whitespace` and
+// similar tolerant tokenizers must NOT be used here: they would silently
+// accept tabs and runs of spaces, allowing crafted message bodies that
+// contain a "From " line with whitespace anomalies to be misclassified as a
+// new message envelope, splitting headers into the previous message.
 fn is_valid_mbox_separator_line(line: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(line) else {
-        return false;
+    // CRLF line endings: drop the trailing \r before validation.
+    let line = match line.last() {
+        Some(b'\r') => &line[..line.len() - 1],
+        _ => line,
     };
-    let mut parts = text.split_whitespace();
-    if parts.next() != Some("From") {
+
+    // Reject any control / non-ASCII byte; tabs and CR are explicitly out.
+    if line.iter().any(|b| !(0x20..=0x7e).contains(b)) {
         return false;
     }
 
-    let Some(_sender) = parts.next() else {
+    let Ok(text) = std::str::from_utf8(line) else {
         return false;
     };
+
+    // No double-space runs. Any field with empty content fails the parse below.
+    if text.contains("  ") {
+        return false;
+    }
+
+    let mut parts = text.split(' ');
+    if parts.next() != Some("From") {
+        return false;
+    }
+    let Some(sender) = parts.next() else {
+        return false;
+    };
+    if sender.is_empty() {
+        return false;
+    }
     let Some(day_name) = parts.next() else {
         return false;
     };
@@ -464,7 +494,28 @@ fn is_valid_mbox_separator_line(line: &[u8]) -> bool {
         return false;
     }
 
-    true
+    // After the year, optional timezone offset (e.g. "+0000"). Anything
+    // beyond that, including extra whitespace, is rejected.
+    match parts.next() {
+        None => true,
+        Some(tz) => {
+            if parts.next().is_some() {
+                return false;
+            }
+            is_valid_mbox_tz(tz)
+        }
+    }
+}
+
+fn is_valid_mbox_tz(tz: &str) -> bool {
+    let bytes = tz.as_bytes();
+    if bytes.len() != 5 {
+        return false;
+    }
+    if bytes[0] != b'+' && bytes[0] != b'-' {
+        return false;
+    }
+    bytes[1..].iter().all(u8::is_ascii_digit)
 }
 
 fn is_valid_mbox_time(value: &str) -> bool {
@@ -472,7 +523,137 @@ fn is_valid_mbox_time(value: &str) -> bool {
     if !(parts.len() == 2 || parts.len() == 3) {
         return false;
     }
-    parts
-        .iter()
-        .all(|part| part.len() == 2 && part.chars().all(|ch| ch.is_ascii_digit()))
+    let mut nums = Vec::with_capacity(parts.len());
+    for part in &parts {
+        if part.len() != 2 || !part.chars().all(|ch| ch.is_ascii_digit()) {
+            return false;
+        }
+        let Ok(n) = part.parse::<u32>() else {
+            return false;
+        };
+        nums.push(n);
+    }
+    if nums[0] > 23 || nums[1] > 59 {
+        return false;
+    }
+    if nums.len() == 3 && nums[2] > 59 {
+        return false;
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn separator_canonical_form_accepted() {
+        assert!(is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 15 12:34:56 2024"
+        ));
+    }
+
+    #[test]
+    fn separator_with_tz_offset_accepted() {
+        assert!(is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 15 12:34:56 2024 +0000"
+        ));
+        assert!(is_valid_mbox_separator_line(
+            b"From user@example.com Tue Dec 31 23:59:59 2024 -0700"
+        ));
+    }
+
+    #[test]
+    fn separator_with_crlf_line_ending_accepted() {
+        assert!(is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 15 12:34:56 2024\r"
+        ));
+    }
+
+    #[test]
+    fn separator_rejects_tab_between_fields() {
+        assert!(!is_valid_mbox_separator_line(
+            b"From\tuser@example.com Mon Jan 15 12:34:56 2024"
+        ));
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com\tMon Jan 15 12:34:56 2024"
+        ));
+    }
+
+    #[test]
+    fn separator_rejects_double_space() {
+        assert!(!is_valid_mbox_separator_line(
+            b"From  user@example.com Mon Jan 15 12:34:56 2024"
+        ));
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Mon  Jan 15 12:34:56 2024"
+        ));
+    }
+
+    #[test]
+    fn separator_rejects_non_ascii() {
+        assert!(!is_valid_mbox_separator_line(
+            "From usér@example.com Mon Jan 15 12:34:56 2024".as_bytes()
+        ));
+    }
+
+    #[test]
+    fn separator_rejects_empty_sender() {
+        assert!(!is_valid_mbox_separator_line(
+            b"From  Mon Jan 15 12:34:56 2024"
+        ));
+    }
+
+    #[test]
+    fn separator_rejects_invalid_day_or_month() {
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Funday Jan 15 12:34:56 2024"
+        ));
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Mon NotAMonth 15 12:34:56 2024"
+        ));
+    }
+
+    #[test]
+    fn separator_rejects_invalid_day_of_month_or_time() {
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 32 12:34:56 2024"
+        ));
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 0 12:34:56 2024"
+        ));
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 15 25:00:00 2024"
+        ));
+    }
+
+    #[test]
+    fn separator_rejects_short_or_non_numeric_year() {
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 15 12:34:56 24"
+        ));
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 15 12:34:56 abcd"
+        ));
+    }
+
+    #[test]
+    fn separator_rejects_extra_trailing_field() {
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 15 12:34:56 2024 +0000 garbage"
+        ));
+    }
+
+    #[test]
+    fn separator_rejects_malformed_tz() {
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 15 12:34:56 2024 +00"
+        ));
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 15 12:34:56 2024 0000"
+        ));
+        assert!(!is_valid_mbox_separator_line(
+            b"From user@example.com Mon Jan 15 12:34:56 2024 +abcd"
+        ));
+    }
 }

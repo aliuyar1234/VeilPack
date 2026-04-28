@@ -1,24 +1,14 @@
 use std::process::ExitCode;
 
-use crate::args::{exit_usage, parse_run_args, validate_run_args};
-use crate::artifact_processor::{ArtifactProcessStatus, ArtifactProcessor};
-use crate::logging::log_error;
+use crate::args::{RunArgs, exit_usage, validate_run_args};
+use crate::error::AppError;
 use crate::pack_finalize::{exit_code_for_summary, finalize_run};
+use crate::parallel::run_pool;
 use crate::run_bootstrap::bootstrap_run;
 use crate::runtime_limits::{RuntimeLimits, load_runtime_limits_from_json};
-use crate::{EXIT_FATAL, EXIT_OK, print_run_help};
+use crate::{EXIT_FATAL, print_run_help};
 
-pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
-    if args.iter().any(|a| a == "-h" || a == "--help") {
-        print_run_help(exe);
-        return ExitCode::from(EXIT_OK);
-    }
-
-    let parsed = match parse_run_args(args) {
-        Ok(p) => p,
-        Err(msg) => return exit_usage(exe, &msg, print_run_help),
-    };
-
+pub(super) fn cmd_run(exe: &str, parsed: RunArgs) -> ExitCode {
     if let Err(msg) = validate_run_args(&parsed) {
         return exit_usage(exe, &msg, print_run_help);
     }
@@ -31,60 +21,46 @@ pub(super) fn cmd_run(exe: &str, args: &[String]) -> ExitCode {
         None => RuntimeLimits::default(),
     };
 
-    let mut run = match bootstrap_run(exe, parsed, runtime_limits) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-
-    let extractors = veil_extract::ExtractorRegistry::new(run.context.archive_limits);
-    let detector = veil_detect::DetectorEngineV1;
-    let transformer = veil_transform::TransformerV1;
-
-    let mut verified_count = 0_u64;
-    for artifact in &run.artifacts {
-        let status = {
-            let mut processor = ArtifactProcessor {
-                context: &run.context,
-                paths: &run.paths,
-                ledger: &mut run.ledger,
-                extractors: &extractors,
-                detector: &detector,
-                transformer: &transformer,
-                proof_tokens_by_artifact: &mut run.proof_tokens_by_artifact,
-                workdir_bytes_observed: &mut run.workdir_bytes_observed,
-            };
-            match processor.process(artifact) {
-                Ok(v) => v,
-                Err(code) => return code,
-            }
-        };
-
-        if matches!(status, ArtifactProcessStatus::Verified) {
-            verified_count = verified_count.saturating_add(1);
-            if verified_count == 1
-                && std::env::var("VEIL_FAILPOINT").as_deref() == Ok("after_first_verified")
-            {
-                log_error(
-                    run.context.log_ctx(),
-                    "failpoint_triggered",
-                    "INTERNAL_ERROR",
-                    Some("failpoint triggered (redacted)"),
-                );
-                return ExitCode::from(EXIT_FATAL);
-            }
-        }
+    match run_with_args(exe, parsed, runtime_limits) {
+        Ok(code) => code,
+        Err(AppError::Usage(msg)) => exit_usage(exe, &msg, print_run_help),
+        Err(_e) => ExitCode::from(EXIT_FATAL),
     }
+}
 
-    let summary = match finalize_run(
+fn run_with_args(
+    exe: &str,
+    parsed: RunArgs,
+    runtime_limits: RuntimeLimits,
+) -> Result<ExitCode, AppError> {
+    let mut run = bootstrap_run(exe, parsed, runtime_limits)?;
+
+    // Open a run-level span so every subsequent event automatically picks up
+    // run_id and policy_id without per-call plumbing. bootstrap_run already
+    // emitted its own events with explicit run_id / policy_id fields when
+    // those identifiers were known.
+    let run_span = tracing::info_span!(
+        "run",
+        run_id = run.context.run_id_str(),
+        policy_id = run.context.policy_id_str(),
+    );
+    let _span_guard = run_span.enter();
+
+    // Phase 4 always uses the worker-pool harness: with N=1 it
+    // degenerates to producer + 1 worker + committer (still serial in
+    // observable effect, byte-identical to the pre-pool inline code);
+    // with N > 1 it parallelizes the pure pipeline while the committer
+    // applies side-effects in `ArtifactSortKey` order.
+    let max_workers = run.context.parsed.max_workers.unwrap_or(1);
+    let _verified_count = run_pool(&mut run, max_workers)?;
+
+    let summary = finalize_run(
         &run.context,
         &run.paths,
         &run.artifacts,
         &run.ledger,
         &run.proof_tokens_by_artifact,
-    ) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
+    )?;
 
-    exit_code_for_summary(&summary)
+    Ok(exit_code_for_summary(&summary))
 }

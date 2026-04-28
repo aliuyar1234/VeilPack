@@ -114,7 +114,10 @@ fn quarantine_raw_copy_is_opt_in_and_contained() {
         std::fs::read_to_string(output.join("pack_manifest.json")).expect("read pack_manifest");
     let pack_manifest: PackManifestRead =
         serde_json::from_str(&pack_manifest_json).expect("parse pack_manifest");
-    assert_eq!(pack_manifest.pack_schema_version, "pack.v1");
+    assert_eq!(
+        pack_manifest.pack_schema_version,
+        veil_evidence::PackSchemaVersion::CURRENT.as_str()
+    );
     assert_eq!(
         pack_manifest.ledger_schema_version,
         veil_evidence::LEDGER_SCHEMA_VERSION
@@ -305,7 +308,7 @@ fn proof_tokens_are_emitted_as_digests() {
     assert!(!tokens.is_empty());
     for t in tokens {
         let t = t.as_str().expect("token string");
-        assert_eq!(t.len(), 12);
+        assert_eq!(t.len(), veil_detect::PROOF_TOKEN_HEX_LEN);
         assert!(t.chars().all(|c| c.is_ascii_hexdigit()));
     }
     assert!(!artifacts_ndjson.contains("4111-1111-1111-1111"));

@@ -362,7 +362,18 @@ fn run_rejects_limits_json_zero_max_processing_ms() {
 #[test]
 fn run_quarantines_when_processing_time_limit_is_too_low() {
     let input = TestDir::new("input_limits_processing_ms");
-    std::fs::write(input.join("a.json"), r#"{"v":"SECRET"}"#).expect("write input file");
+    // Build an NDJSON artifact large enough that even fast SSDs + WAL
+    // ledger writes can't squeeze the per-artifact pipeline (load,
+    // extract, detect, transform, write, hash, ledger write, evidence
+    // append) under 1ms. Each line forces detector + transformer work
+    // because the SECRET token appears repeatedly.
+    let mut payload = String::with_capacity(256 * 1024);
+    for i in 0..4096 {
+        payload.push_str(&format!(
+            "{{\"id\":{i},\"v\":\"SECRET-{i}-payload-padding-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\"}}\n"
+        ));
+    }
+    std::fs::write(input.join("a.ndjson"), &payload).expect("write input file");
 
     let policy = TestDir::new("policy_limits_processing_ms");
     std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))

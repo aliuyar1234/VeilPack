@@ -5,9 +5,10 @@ This matrix defines which pack metadata versions are accepted by `veil verify`.
 ## Verified Combinations
 | pack_schema_version | ledger_schema_version | Supported |
 |---|---|---|
+| `pack.v2` | `ledger.v2` | yes |
 | `pack.v1` | `ledger.v1` | yes |
-| `pack.v0` | `ledger.v1` | no |
-| `pack.v1` | `ledger.v0` | no |
+| `pack.v0` | `ledger.v2` | no |
+| `pack.v2` | `ledger.v0` | no |
 
 ## Policy
 - Compatibility is explicit and versioned.

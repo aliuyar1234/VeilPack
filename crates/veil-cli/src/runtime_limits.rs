@@ -57,11 +57,11 @@ impl Default for RuntimeLimits {
 }
 
 pub(crate) fn load_runtime_limits_from_json(path: &Path) -> Result<RuntimeLimits, String> {
-    let json = std::fs::read_to_string(path)
-        .map_err(|_| "limits-json could not be read (redacted)".to_string())?;
+    let json =
+        std::fs::read_to_string(path).map_err(|_| "limits-json could not be read".to_string())?;
 
-    let parsed: LimitsFileV1 = serde_json::from_str(&json)
-        .map_err(|_| "limits-json is not valid JSON (redacted)".to_string())?;
+    let parsed: LimitsFileV1 =
+        serde_json::from_str(&json).map_err(|_| "limits-json is not valid JSON".to_string())?;
 
     if parsed.schema_version != "limits.v1" {
         return Err("limits-json schema_version must be 'limits.v1' (v1)".to_string());

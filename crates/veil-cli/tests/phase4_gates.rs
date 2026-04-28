@@ -138,7 +138,7 @@ fn write_limits_json(dir: &TestDir, json: &str) -> PathBuf {
 
 fn make_tar_bytes(path: &str, data: &[u8]) -> Vec<u8> {
     // Minimal ustar tar with one regular file entry.
-    assert!(path.as_bytes().len() <= 100);
+    assert!(path.len() <= 100);
 
     let mut header = [0_u8; 512];
     header[..path.len()].copy_from_slice(path.as_bytes());
@@ -175,9 +175,9 @@ fn make_tar_bytes(path: &str, data: &[u8]) -> Vec<u8> {
     out.extend_from_slice(data);
 
     let pad = (512 - (data.len() % 512)) % 512;
-    out.extend(std::iter::repeat(0_u8).take(pad));
+    out.extend(std::iter::repeat_n(0_u8, pad));
     // two zero blocks
-    out.extend(std::iter::repeat(0_u8).take(1024));
+    out.extend(std::iter::repeat_n(0_u8, 1024));
     out
 }
 
@@ -1066,4 +1066,328 @@ fn zip_extension_with_ndjson_payload_quarantines_parse_error() {
         })
         .expect("find quarantine record");
     assert_eq!(rec.reason_code, "PARSE_ERROR");
+}
+
+#[test]
+fn pack_v2_writes_proof_tokens_to_ledger_and_round_trips() {
+    // End-to-end check that pack v2 records proof tokens in the ledger
+    // sqlite DB rather than reconstructing them from artifacts.ndjson.
+    // Re-opening the ledger after the run must surface the same tokens.
+    let input = TestDir::new("pack_v2_proof_tokens_input");
+    std::fs::write(input.join("a.txt"), "CREDITCARD 4111-1111-1111-1111").expect("write input");
+
+    let policy = TestDir::new("pack_v2_proof_tokens_policy");
+    std::fs::write(
+        policy.join("policy.json"),
+        minimal_policy_json(r"4111-1111-1111-1111"),
+    )
+    .expect("write policy.json");
+
+    let output = TestDir::new("pack_v2_proof_tokens_output");
+    let out = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .output()
+        .expect("run veil run");
+    assert_eq!(out.status.code(), Some(0));
+
+    // Manifest version is the V2 wire token.
+    let manifest_text = std::fs::read_to_string(output.join("pack_manifest.json"))
+        .expect("read pack_manifest.json");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("parse pack_manifest.json");
+    assert_eq!(
+        manifest["pack_schema_version"].as_str(),
+        Some(veil_evidence::PackSchemaVersion::CURRENT.as_str())
+    );
+    assert_eq!(
+        manifest["ledger_schema_version"].as_str(),
+        Some(veil_evidence::LedgerSchemaVersion::CURRENT.as_str())
+    );
+
+    // Tokens come back via the ledger API.
+    let ledger_path = output.join("evidence").join("ledger.sqlite3");
+    let ledger = veil_evidence::Ledger::open_existing(&ledger_path).expect("open ledger");
+    let records = ledger.artifact_records().expect("read artifacts");
+    assert_eq!(records.len(), 1);
+    let only = &records[0];
+    let tokens = ledger
+        .proof_tokens_for(&only.artifact_id)
+        .expect("read tokens");
+    assert!(!tokens.is_empty(), "proof tokens must persist in DB");
+    for t in &tokens {
+        assert_eq!(t.len(), veil_detect::PROOF_TOKEN_HEX_LEN);
+        assert!(t.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    // Cross-check: NDJSON view (the wire schema) carries the same tokens.
+    let artifacts_ndjson =
+        std::fs::read_to_string(output.join("evidence").join("artifacts.ndjson"))
+            .expect("read artifacts.ndjson");
+    let first_line = artifacts_ndjson.lines().next().expect("first line");
+    let rec: serde_json::Value = serde_json::from_str(first_line).expect("parse artifacts record");
+    let ndjson_tokens = rec
+        .get("proof_tokens")
+        .and_then(|v| v.as_array())
+        .expect("proof_tokens array")
+        .iter()
+        .map(|v| v.as_str().expect("string token").to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(ndjson_tokens, tokens);
+}
+
+// --- Task B: --max-workers parallelism gates ---
+
+/// Mixed-content corpus large enough that the worker pool's BTreeMap
+/// reordering is exercised but small enough that integration tests stay
+/// quick.
+fn write_mixed_corpus(input: &TestDir, n: usize) {
+    for i in 0..n {
+        let body = if i % 3 == 0 {
+            format!("artifact-{i}: SECRET-{i}")
+        } else {
+            format!("artifact-{i}: clean text {i}")
+        };
+        std::fs::write(input.join(&format!("file_{i:03}.txt")), body).expect("write input file");
+    }
+}
+
+fn read_file_bytes(path: &Path) -> Vec<u8> {
+    std::fs::read(path).expect("read file")
+}
+
+fn collect_sanitized_outputs(pack_root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let dir = pack_root.join("sanitized");
+    if !dir.exists() {
+        return out;
+    }
+    for entry in std::fs::read_dir(&dir).expect("read sanitized") {
+        let entry = entry.expect("read sanitized entry");
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let bytes = read_file_bytes(&entry.path());
+        out.insert(name, bytes);
+    }
+    out
+}
+
+#[test]
+fn parallel_workers_produce_byte_identical_output() {
+    // Determinism contract: --max-workers=1 and --max-workers=8 produce
+    // byte-identical pack artifacts on the same input.
+    let policy = TestDir::new("parallel_determinism_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
+        .expect("write policy.json");
+
+    // Fixed corpus shared by both runs.
+    let input = TestDir::new("parallel_determinism_input");
+    write_mixed_corpus(&input, 24);
+
+    // First run: --max-workers=1 (the byte-identical baseline).
+    let out1 = TestDir::new("parallel_determinism_n1_out");
+    let r1 = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(out1.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .args(["--max-workers", "1"])
+        .output()
+        .expect("run n1");
+    assert!(matches!(r1.status.code(), Some(0) | Some(2)));
+
+    // Second run: --max-workers=8.
+    let out8 = TestDir::new("parallel_determinism_n8_out");
+    let r8 = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(out8.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .args(["--max-workers", "8"])
+        .output()
+        .expect("run n8");
+    assert_eq!(r8.status.code(), r1.status.code());
+
+    // sanitized/ outputs match byte-for-byte.
+    let sanitized1 = collect_sanitized_outputs(out1.path());
+    let sanitized8 = collect_sanitized_outputs(out8.path());
+    assert_eq!(
+        sanitized1, sanitized8,
+        "sanitized outputs must be byte-identical regardless of worker count"
+    );
+
+    // artifacts.ndjson byte-identical (same record order, same fields).
+    let nd1 =
+        std::fs::read(out1.path().join("evidence").join("artifacts.ndjson")).expect("read nd1");
+    let nd8 =
+        std::fs::read(out8.path().join("evidence").join("artifacts.ndjson")).expect("read nd8");
+    assert_eq!(
+        nd1, nd8,
+        "artifacts.ndjson must be byte-identical regardless of worker count"
+    );
+
+    // quarantine index byte-identical.
+    let q1 = std::fs::read(out1.path().join("quarantine").join("index.ndjson")).unwrap_or_default();
+    let q8 = std::fs::read(out8.path().join("quarantine").join("index.ndjson")).unwrap_or_default();
+    assert_eq!(q1, q8, "quarantine index must be byte-identical");
+
+    // Ledger artifact rows match in order and field-for-field.
+    let ledger1 =
+        veil_evidence::Ledger::open_existing(&out1.path().join("evidence").join("ledger.sqlite3"))
+            .expect("open ledger n1");
+    let ledger8 =
+        veil_evidence::Ledger::open_existing(&out8.path().join("evidence").join("ledger.sqlite3"))
+            .expect("open ledger n8");
+    let recs1 = ledger1.artifact_records().expect("records n1");
+    let recs8 = ledger8.artifact_records().expect("records n8");
+    assert_eq!(recs1.len(), recs8.len());
+    for (a, b) in recs1.iter().zip(recs8.iter()) {
+        assert_eq!(a.artifact_id.to_string(), b.artifact_id.to_string());
+        assert_eq!(
+            a.source_locator_hash.to_string(),
+            b.source_locator_hash.to_string()
+        );
+        assert_eq!(a.size_bytes, b.size_bytes);
+        assert_eq!(a.artifact_type, b.artifact_type);
+        assert_eq!(a.state.as_str(), b.state.as_str());
+        assert_eq!(a.quarantine_reason_code, b.quarantine_reason_code);
+        assert_eq!(a.output_id, b.output_id);
+    }
+}
+
+#[test]
+fn parallel_workers_commit_in_sort_order() {
+    // 50 artifacts, --max-workers=4. The committer drains a BTreeMap so
+    // the ledger row ordering reflects ArtifactSortKey ascending — same
+    // order whether the workers finish in any sequence.
+    let policy = TestDir::new("parallel_sort_order_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let input = TestDir::new("parallel_sort_order_input");
+    for i in 0..50 {
+        std::fs::write(input.join(&format!("f_{i:02}.txt")), format!("body-{i}"))
+            .expect("write input");
+    }
+
+    let output = TestDir::new("parallel_sort_order_output");
+    let r = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .args(["--max-workers", "4"])
+        .output()
+        .expect("run sort order");
+    assert_eq!(r.status.code(), Some(0));
+
+    let ledger = veil_evidence::Ledger::open_existing(
+        &output.path().join("evidence").join("ledger.sqlite3"),
+    )
+    .expect("open ledger");
+    let recs = ledger.artifact_records().expect("records");
+    assert_eq!(recs.len(), 50);
+
+    // artifact_records returns rows ORDER BY artifact_id (lex). The
+    // sort-key is (artifact_id, source_locator_hash). Since no two
+    // artifacts share an artifact_id in this test (different bodies),
+    // a strict ascending check on artifact_id is enough to confirm the
+    // committer applied state in sort-key order.
+    for window in recs.windows(2) {
+        assert!(
+            window[0].artifact_id.to_string() < window[1].artifact_id.to_string(),
+            "ledger rows must be in ArtifactSortKey order"
+        );
+    }
+}
+
+#[test]
+fn parallel_workers_handle_quarantine_correctly() {
+    // Mixed corpus: some artifacts verify, others quarantine. The
+    // quarantine index must list quarantined records in sort-key order
+    // regardless of which worker produced them first.
+    let policy = TestDir::new("parallel_quarantine_policy");
+    std::fs::write(policy.join("policy.json"), minimal_policy_json("NO_MATCH"))
+        .expect("write policy.json");
+
+    let input = TestDir::new("parallel_quarantine_input");
+    // Half of the corpus contains files with extensions that have no
+    // v1 extractor (UNSUPPORTED_FORMAT -> Quarantined), half are .txt
+    // (Verified).
+    for i in 0..16 {
+        if i % 2 == 0 {
+            std::fs::write(input.join(&format!("f_{i:02}.txt")), format!("ok {i}"))
+                .expect("write txt");
+        } else {
+            std::fs::write(
+                input.join(&format!("f_{i:02}.bin")),
+                [0u8, 1, 2, 3, i as u8],
+            )
+            .expect("write bin");
+        }
+    }
+
+    let output = TestDir::new("parallel_quarantine_output");
+    let r = veil_cmd()
+        .arg("run")
+        .arg("--input")
+        .arg(input.path())
+        .arg("--output")
+        .arg(output.path())
+        .arg("--policy")
+        .arg(policy.path())
+        .args(["--max-workers", "4"])
+        .output()
+        .expect("run mixed");
+    // Mixed run with some quarantined artifacts -> exit 2.
+    assert_eq!(r.status.code(), Some(2));
+
+    // Quarantine index records appear in ArtifactSortKey order
+    // (artifact_id ASC, source_locator_hash ASC). We need both fields to
+    // verify so we re-parse here rather than reusing the slimmer
+    // `QuarantineIndexRecord` helper.
+    let qindex_text =
+        std::fs::read_to_string(output.path().join("quarantine").join("index.ndjson"))
+            .expect("read quarantine index");
+    let qpairs: Vec<(String, String)> = qindex_text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).expect("parse line");
+            (
+                v["artifact_id"].as_str().expect("artifact_id").to_string(),
+                v["source_locator_hash"]
+                    .as_str()
+                    .expect("source_locator_hash")
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert!(!qpairs.is_empty());
+    for window in qpairs.windows(2) {
+        assert!(
+            window[0] <= window[1],
+            "quarantine index must follow ArtifactSortKey ascending order"
+        );
+    }
+
+    // Make sure verified artifacts produced sanitized outputs.
+    let sanitized = collect_sanitized_outputs(output.path());
+    assert!(
+        !sanitized.is_empty(),
+        "verified .txt files should appear in sanitized/"
+    );
 }

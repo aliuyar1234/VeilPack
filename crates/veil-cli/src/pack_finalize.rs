@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 
+use crate::error::AppError;
 use crate::evidence_io::{
-    ArtifactRunResult, PackManifestJsonV1, RunManifestJsonV1, RunTotals, TOOL_VERSION,
-    write_artifacts_evidence, write_quarantine_index,
+    ArtifactRunResult, RunManifestJsonV1, RunTotals, TOOL_VERSION, write_artifacts_evidence,
+    write_quarantine_index,
 };
 use crate::fs_safety::write_json_atomic;
-use crate::logging::{log_error, log_info};
 use crate::run_bootstrap::{RunContext, RunPaths};
-use crate::{EXIT_FATAL, EXIT_OK, EXIT_QUARANTINED, PACK_SCHEMA_VERSION};
+use crate::{EXIT_OK, EXIT_QUARANTINED};
 
 pub(crate) struct FinalizeSummary {
     pub(crate) artifacts_quarantined: u64,
@@ -20,35 +20,35 @@ pub(crate) fn finalize_run(
     artifacts: &[crate::input_inventory::DiscoveredArtifact],
     ledger: &veil_evidence::Ledger,
     proof_tokens_by_artifact: &BTreeMap<veil_domain::ArtifactId, Vec<String>>,
-) -> Result<FinalizeSummary, ExitCode> {
+) -> Result<FinalizeSummary, AppError> {
     let mut results = Vec::with_capacity(artifacts.len());
     for artifact in artifacts {
         let summary = match ledger.artifact_summary(&artifact.sort_key.artifact_id) {
             Ok(Some(s)) => s,
             Ok(None) => {
-                log_error(
-                    context.log_ctx(),
-                    "ledger_missing_artifact_record",
-                    "INTERNAL_ERROR",
-                    Some("ledger missing artifact record (redacted)"),
+                tracing::error!(
+                    event = "ledger_missing_artifact_record",
+                    reason_code = "INTERNAL_ERROR",
+                    "ledger missing artifact record"
                 );
-                return Err(ExitCode::from(EXIT_FATAL));
+                return Err(AppError::Internal(
+                    "ledger_missing_artifact_record".to_string(),
+                ));
             }
             Err(_) => {
-                log_error(
-                    context.log_ctx(),
-                    "ledger_read_failed",
-                    "INTERNAL_ERROR",
-                    Some("ledger read failed (redacted)"),
+                tracing::error!(
+                    event = "ledger_read_failed",
+                    reason_code = "INTERNAL_ERROR",
+                    "ledger read failed"
                 );
-                return Err(ExitCode::from(EXIT_FATAL));
+                return Err(AppError::Internal("ledger_read_failed".to_string()));
             }
         };
 
         results.push(ArtifactRunResult {
             sort_key: artifact.sort_key,
             size_bytes: artifact.size_bytes,
-            artifact_type: artifact.artifact_type.clone(),
+            artifact_type: artifact.artifact_type_wire().to_string(),
             state: summary.state,
             quarantine_reason_code: summary.quarantine_reason_code,
             output_id: summary.output_id,
@@ -68,13 +68,12 @@ pub(crate) fn finalize_run(
             veil_domain::ArtifactState::Quarantined => {
                 artifacts_quarantined += 1;
                 let Some(code) = result.quarantine_reason_code.as_ref() else {
-                    log_error(
-                        context.log_ctx(),
-                        "quarantine_reason_missing",
-                        "INTERNAL_ERROR",
-                        Some("quarantined artifact missing reason code (redacted)"),
+                    tracing::error!(
+                        event = "quarantine_reason_missing",
+                        reason_code = "INTERNAL_ERROR",
+                        "quarantined artifact missing reason code"
                     );
-                    return Err(ExitCode::from(EXIT_FATAL));
+                    return Err(AppError::Internal("quarantine_reason_missing".to_string()));
                 };
                 *quarantine_reason_counts.entry(code.clone()).or_insert(0) += 1;
             }
@@ -83,43 +82,45 @@ pub(crate) fn finalize_run(
     }
 
     if let Err(msg) = write_quarantine_index(&paths.quarantine_index_path, &results) {
-        log_error(
-            context.log_ctx(),
-            "write_quarantine_index_failed",
-            "INTERNAL_ERROR",
-            Some(msg.as_str()),
+        tracing::error!(
+            event = "write_quarantine_index_failed",
+            reason_code = "INTERNAL_ERROR",
+            detail = %msg,
+            "could not write quarantine index"
         );
-        return Err(ExitCode::from(EXIT_FATAL));
+        return Err(AppError::Internal(
+            "write_quarantine_index_failed".to_string(),
+        ));
     }
 
     if std::env::var("VEIL_FAILPOINT").as_deref() == Ok("after_quarantine_index_write") {
-        log_error(
-            context.log_ctx(),
-            "failpoint_triggered",
-            "INTERNAL_ERROR",
-            Some("failpoint triggered (redacted)"),
+        tracing::error!(
+            event = "failpoint_triggered",
+            reason_code = "INTERNAL_ERROR",
+            "failpoint triggered"
         );
-        return Err(ExitCode::from(EXIT_FATAL));
+        return Err(AppError::Internal("failpoint_triggered".to_string()));
     }
 
     if let Err(msg) = write_artifacts_evidence(&paths.artifacts_ndjson_path, &results) {
-        log_error(
-            context.log_ctx(),
-            "write_artifacts_evidence_failed",
-            "INTERNAL_ERROR",
-            Some(msg.as_str()),
+        tracing::error!(
+            event = "write_artifacts_evidence_failed",
+            reason_code = "INTERNAL_ERROR",
+            detail = %msg,
+            "could not write artifacts evidence"
         );
-        return Err(ExitCode::from(EXIT_FATAL));
+        return Err(AppError::Internal(
+            "write_artifacts_evidence_failed".to_string(),
+        ));
     }
 
     if std::env::var("VEIL_FAILPOINT").as_deref() == Ok("after_artifacts_evidence_write") {
-        log_error(
-            context.log_ctx(),
-            "failpoint_triggered",
-            "INTERNAL_ERROR",
-            Some("failpoint triggered (redacted)"),
+        tracing::error!(
+            event = "failpoint_triggered",
+            reason_code = "INTERNAL_ERROR",
+            "failpoint triggered"
         );
-        return Err(ExitCode::from(EXIT_FATAL));
+        return Err(AppError::Internal("failpoint_triggered".to_string()));
     }
 
     let run_manifest_path = paths.evidence_dir.join("run_manifest.json");
@@ -141,45 +142,39 @@ pub(crate) fn finalize_run(
         quarantine_copy_enabled: context.parsed.quarantine_copy,
     };
     if write_json_atomic(&run_manifest_path, &run_manifest).is_err() {
-        log_error(
-            context.log_ctx(),
-            "write_run_manifest_failed",
-            "INTERNAL_ERROR",
-            Some("could not write run_manifest.json (redacted)"),
+        tracing::error!(
+            event = "write_run_manifest_failed",
+            reason_code = "INTERNAL_ERROR",
+            "could not write run_manifest.json"
         );
-        return Err(ExitCode::from(EXIT_FATAL));
+        return Err(AppError::Internal("write_run_manifest_failed".to_string()));
     }
 
     let pack_manifest_path = paths.output.join("pack_manifest.json");
-    let pack_manifest = PackManifestJsonV1 {
-        pack_schema_version: PACK_SCHEMA_VERSION,
-        tool_version: TOOL_VERSION,
-        run_id: context.run_id_str().to_string(),
-        policy_id: context.policy_id_str().to_string(),
-        input_corpus_id: context.input_corpus_id_str().to_string(),
-        tokenization_enabled: context.parsed.enable_tokenization,
-        tokenization_scope: context.tokenization_scope(),
-        quarantine_copy_enabled: context.parsed.quarantine_copy,
-        ledger_schema_version: veil_evidence::LEDGER_SCHEMA_VERSION,
-    };
+    let pack_manifest = veil_evidence::PackManifest::current(
+        TOOL_VERSION,
+        context.run_id_str().to_string(),
+        context.policy_id_str().to_string(),
+        context.input_corpus_id_str().to_string(),
+        context.parsed.enable_tokenization,
+        context.tokenization_scope().map(str::to_string),
+        context.parsed.quarantine_copy,
+    );
     if write_json_atomic(&pack_manifest_path, &pack_manifest).is_err() {
-        log_error(
-            context.log_ctx(),
-            "write_pack_manifest_failed",
-            "INTERNAL_ERROR",
-            Some("could not write pack_manifest.json (redacted)"),
+        tracing::error!(
+            event = "write_pack_manifest_failed",
+            reason_code = "INTERNAL_ERROR",
+            "could not write pack_manifest.json"
         );
-        return Err(ExitCode::from(EXIT_FATAL));
+        return Err(AppError::Internal("write_pack_manifest_failed".to_string()));
     }
 
-    let mut run_complete_counters = BTreeMap::<&str, u64>::new();
-    run_complete_counters.insert("artifacts_discovered", artifacts.len() as u64);
-    run_complete_counters.insert("artifacts_verified", artifacts_verified);
-    run_complete_counters.insert("artifacts_quarantined", artifacts_quarantined);
-    log_info(
-        context.log_ctx(),
-        "run_completed",
-        Some(run_complete_counters),
+    tracing::info!(
+        event = "run_completed",
+        artifacts_discovered = artifacts.len() as u64,
+        artifacts_verified,
+        artifacts_quarantined,
+        "run completed"
     );
 
     let _ = std::fs::remove_file(&paths.marker_path);

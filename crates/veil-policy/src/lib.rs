@@ -14,11 +14,15 @@ pub const POLICY_SCHEMA_V1: &str = "policy.v1";
 const REGEX_DFA_SIZE_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 const REGEX_SIZE_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PolicyLoadError {
+    #[error("policy bundle io error")]
     Io,
+    #[error("policy bundle is not valid JSON")]
     InvalidJson,
+    #[error("policy bundle has unsupported schema_version")]
     InvalidSchemaVersion,
+    #[error("policy bundle is invalid: {0}")]
     InvalidPolicy(String),
 }
 
@@ -83,11 +87,10 @@ pub fn load_policy_bundle(policy_dir: &Path) -> Result<Policy, PolicyLoadError> 
         return Err(PolicyLoadError::InvalidSchemaVersion);
     }
 
-    if let Some(severity) = defaults.severity.as_deref() {
-        let _ = parse_severity(severity)?;
-    }
-    if let Some(action) = defaults.action {
-        let _ = compile_action(action)?;
+    if defaults.severity.is_some() || defaults.action.is_some() {
+        return Err(PolicyLoadError::InvalidPolicy(
+            "defaults.severity and defaults.action are not supported in v1 baseline".to_string(),
+        ));
     }
 
     if !scopes.is_empty() {

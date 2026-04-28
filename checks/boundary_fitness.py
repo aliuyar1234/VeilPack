@@ -8,6 +8,7 @@ LAYER_ORDER = [
     "veil-domain",
     "veil-policy",
     "veil-extract",
+    "veil-policy-eval",
     "veil-detect",
     "veil-transform",
     "veil-verify",

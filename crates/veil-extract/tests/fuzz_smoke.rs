@@ -1,7 +1,7 @@
 use std::io::{Cursor, Write};
 
 use veil_domain::{
-    ArchiveLimits, QuarantineReasonCode, hash_artifact_id, hash_source_locator_hash,
+    ArchiveLimits, ArtifactType, QuarantineReasonCode, hash_artifact_id, hash_source_locator_hash,
 };
 use veil_extract::{ArtifactContext, ExtractOutcome, ExtractorRegistry};
 use zip::write::FileOptions;
@@ -65,7 +65,7 @@ fn make_zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
 
 fn make_tar_bytes(path: &str, data: &[u8]) -> Vec<u8> {
     // Minimal ustar tar with one regular file entry.
-    assert!(path.as_bytes().len() <= 100);
+    assert!(path.len() <= 100);
 
     let mut header = [0_u8; 512];
     header[..path.len()].copy_from_slice(path.as_bytes());
@@ -102,9 +102,9 @@ fn make_tar_bytes(path: &str, data: &[u8]) -> Vec<u8> {
     out.extend_from_slice(data);
 
     let pad = (512 - (data.len() % 512)) % 512;
-    out.extend(std::iter::repeat(0_u8).take(pad));
+    out.extend(std::iter::repeat_n(0_u8, pad));
     // two zero blocks
-    out.extend(std::iter::repeat(0_u8).take(1024));
+    out.extend(std::iter::repeat_n(0_u8, 1024));
     out
 }
 
@@ -117,19 +117,15 @@ fn extractors_do_not_panic_on_random_bytes() {
         source_locator_hash: &source_locator_hash,
     };
 
-    let types = [
-        "TEXT", "CSV", "TSV", "JSON", "NDJSON", "ZIP", "TAR", "EML", "MBOX", "DOCX", "PPTX", "XLSX",
-    ];
-
     let mut rng = XorShift64::new(0xC0FFEE);
     for _ in 0..250 {
         let len = rng.gen_len(8192);
         let mut bytes = vec![0_u8; len];
         rng.fill_bytes(&mut bytes);
 
-        for ty in types {
+        for ty in ArtifactType::ALL {
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                reg.extract_by_type(ty, ctx, &bytes)
+                reg.extract(*ty, ctx, &bytes)
             }));
             assert!(res.is_ok(), "extractor panicked for type={ty} len={len}");
         }
@@ -146,14 +142,14 @@ fn archive_path_traversal_is_quarantined() {
     };
 
     let zip_bytes = make_zip_bytes(&[("../evil.txt", b"hello")]);
-    let out = reg.extract_by_type("ZIP", ctx, &zip_bytes);
+    let out = reg.extract(ArtifactType::Zip, ctx, &zip_bytes);
     let ExtractOutcome::Quarantined { reason, .. } = out else {
         panic!("expected quarantine");
     };
     assert_eq!(reason, QuarantineReasonCode::UnsafePath);
 
     let tar_bytes = make_tar_bytes("../evil.txt", b"hello");
-    let out = reg.extract_by_type("TAR", ctx, &tar_bytes);
+    let out = reg.extract(ArtifactType::Tar, ctx, &tar_bytes);
     let ExtractOutcome::Quarantined { reason, .. } = out else {
         panic!("expected quarantine");
     };
@@ -162,8 +158,10 @@ fn archive_path_traversal_is_quarantined() {
 
 #[test]
 fn archive_limits_are_enforced() {
-    let mut limits = ArchiveLimits::default();
-    limits.max_entries_per_archive = 1;
+    let limits = ArchiveLimits {
+        max_entries_per_archive: 1,
+        ..ArchiveLimits::default()
+    };
     let reg = ExtractorRegistry::new(limits);
 
     let (artifact_id, source_locator_hash) = ctx();
@@ -173,7 +171,7 @@ fn archive_limits_are_enforced() {
     };
 
     let zip_bytes = make_zip_bytes(&[("a.txt", b"hello"), ("b.txt", b"world")]);
-    let out = reg.extract_by_type("ZIP", ctx, &zip_bytes);
+    let out = reg.extract(ArtifactType::Zip, ctx, &zip_bytes);
     let ExtractOutcome::Quarantined { reason, .. } = out else {
         panic!("expected quarantine");
     };

@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,6 @@ use crate::fs_safety::{
     ensure_dir_exists_or_create, ensure_existing_path_components_safe, is_unsafe_reparse_point,
     sync_parent_dir, write_bytes_atomic,
 };
-use crate::logging::{LogContext, log_error};
 
 pub(crate) const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PROOF_KEY_DERIVATION_DOMAIN: &[u8] = b"veil.proof.key.v1";
@@ -17,6 +16,9 @@ const PROOF_KEY_DERIVATION_DOMAIN: &[u8] = b"veil.proof.key.v1";
 pub(crate) struct ArtifactRunResult {
     pub(crate) sort_key: veil_domain::ArtifactSortKey,
     pub(crate) size_bytes: u64,
+    /// Wire-format `artifact_type` string. Either one of the `ArtifactType`
+    /// canonical values (`"TEXT"`, `"ZIP"`, etc.) or `"FILE"` for files
+    /// without a v1 extractor.
     pub(crate) artifact_type: String,
     pub(crate) state: veil_domain::ArtifactState,
     pub(crate) quarantine_reason_code: Option<String>,
@@ -72,35 +74,6 @@ pub(crate) struct RunManifestJsonV1 {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct PackManifestJsonV1 {
-    pub(crate) pack_schema_version: &'static str,
-    pub(crate) tool_version: &'static str,
-    pub(crate) run_id: String,
-    pub(crate) policy_id: String,
-    pub(crate) input_corpus_id: String,
-    pub(crate) tokenization_enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) tokenization_scope: Option<&'static str>,
-    pub(crate) quarantine_copy_enabled: bool,
-    pub(crate) ledger_schema_version: &'static str,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PackManifestJsonV1Read {
-    pub(crate) pack_schema_version: String,
-    pub(crate) tool_version: String,
-    pub(crate) run_id: String,
-    pub(crate) policy_id: String,
-    pub(crate) input_corpus_id: String,
-    pub(crate) tokenization_enabled: bool,
-    #[serde(default)]
-    pub(crate) tokenization_scope: Option<String>,
-    pub(crate) quarantine_copy_enabled: bool,
-    pub(crate) ledger_schema_version: String,
-}
-
-#[derive(Debug, Serialize)]
 struct QuarantineIndexRecord<'a> {
     artifact_id: &'a str,
     source_locator_hash: &'a str,
@@ -114,20 +87,20 @@ pub(crate) fn write_quarantine_index(
     ensure_existing_path_components_safe(path, "quarantine index")?;
     let dir = path
         .parent()
-        .ok_or_else(|| "could not create quarantine index (redacted)".to_string())?;
+        .ok_or_else(|| "could not create quarantine index".to_string())?;
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| "could not create quarantine index (redacted)".to_string())?;
+        .ok_or_else(|| "could not create quarantine index".to_string())?;
     let tmp_path = dir.join(format!("{file_name}.tmp"));
     if let Ok(meta) = std::fs::symlink_metadata(&tmp_path)
         && (meta.file_type().is_symlink() || is_unsafe_reparse_point(&meta))
     {
-        return Err("could not create quarantine index (redacted)".to_string());
+        return Err("could not create quarantine index".to_string());
     }
 
     let file = std::fs::File::create(&tmp_path)
-        .map_err(|_| "could not create quarantine index (redacted)".to_string())?;
+        .map_err(|_| "could not create quarantine index".to_string())?;
     let mut writer = std::io::BufWriter::new(file);
 
     for a in artifacts {
@@ -135,7 +108,7 @@ pub(crate) fn write_quarantine_index(
             continue;
         }
         let Some(reason_code) = a.quarantine_reason_code.as_deref() else {
-            return Err("quarantined artifact missing reason_code (redacted)".to_string());
+            return Err("quarantined artifact missing reason_code".to_string());
         };
 
         let artifact_id = a.sort_key.artifact_id.to_string();
@@ -146,33 +119,32 @@ pub(crate) fn write_quarantine_index(
             reason_code,
         };
         let line = serde_json::to_string(&record)
-            .map_err(|_| "could not serialize quarantine index record (redacted)".to_string())?;
+            .map_err(|_| "could not serialize quarantine index record".to_string())?;
         writer
             .write_all(line.as_bytes())
             .and_then(|_| writer.write_all(b"\n"))
-            .map_err(|_| "could not write quarantine index (redacted)".to_string())?;
+            .map_err(|_| "could not write quarantine index".to_string())?;
     }
 
     writer
         .flush()
-        .map_err(|_| "could not flush quarantine index (redacted)".to_string())?;
+        .map_err(|_| "could not flush quarantine index".to_string())?;
     let file = writer
         .into_inner()
-        .map_err(|_| "could not flush quarantine index (redacted)".to_string())?;
+        .map_err(|_| "could not flush quarantine index".to_string())?;
     file.sync_all()
-        .map_err(|_| "could not persist quarantine index (redacted)".to_string())?;
+        .map_err(|_| "could not persist quarantine index".to_string())?;
     drop(file);
     ensure_existing_path_components_safe(path, "quarantine index")?;
     if let Ok(meta) = std::fs::symlink_metadata(path)
         && (meta.file_type().is_symlink() || is_unsafe_reparse_point(&meta))
     {
         let _ = std::fs::remove_file(&tmp_path);
-        return Err("quarantine index path is unsafe (redacted)".to_string());
+        return Err("quarantine index path is unsafe".to_string());
     }
     std::fs::rename(&tmp_path, path)
-        .map_err(|_| "could not persist quarantine index (redacted)".to_string())?;
-    sync_parent_dir(path)
-        .map_err(|_| "could not persist quarantine index (redacted)".to_string())?;
+        .map_err(|_| "could not persist quarantine index".to_string())?;
+    sync_parent_dir(path).map_err(|_| "could not persist quarantine index".to_string())?;
     Ok(())
 }
 
@@ -203,6 +175,11 @@ pub(crate) struct ArtifactEvidenceRecordOwned {
     pub(crate) quarantine_reason_code: Option<String>,
     #[serde(default)]
     pub(crate) output_id: Option<String>,
+    /// Wire-schema field: parsed for `deny_unknown_fields` compatibility,
+    /// but the live source of truth is the ledger `proof_tokens` table.
+    /// Keeping the field here means malformed NDJSON still fails closed
+    /// during `verify`'s record parse pass.
+    #[allow(dead_code)]
     #[serde(default)]
     pub(crate) proof_tokens: Vec<String>,
 }
@@ -217,47 +194,6 @@ pub(crate) fn collect_proof_tokens(findings: &[veil_detect::Finding]) -> Vec<Str
     out.into_iter().collect()
 }
 
-pub(crate) fn load_existing_proof_tokens(
-    path: &Path,
-) -> Result<BTreeMap<veil_domain::ArtifactId, Vec<String>>, String> {
-    ensure_existing_path_components_safe(path, "artifacts evidence")?;
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) => {
-            if meta.file_type().is_symlink() || is_unsafe_reparse_point(&meta) || !meta.is_file() {
-                return Err("artifacts.ndjson path is unsafe (redacted)".to_string());
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(_) => return Err("could not read artifacts.ndjson (redacted)".to_string()),
-    };
-
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return Err("could not read artifacts.ndjson (redacted)".to_string()),
-    };
-    let reader = std::io::BufReader::new(file);
-
-    let mut out = BTreeMap::<veil_domain::ArtifactId, Vec<String>>::new();
-    for line in reader.lines() {
-        let line =
-            line.map_err(|_| "could not read artifacts.ndjson line (redacted)".to_string())?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let rec: ArtifactEvidenceRecordOwned = serde_json::from_str(&line)
-            .map_err(|_| "artifacts.ndjson is invalid (redacted)".to_string())?;
-
-        let artifact_id = veil_domain::ArtifactId::from_hex(&rec.artifact_id)
-            .map_err(|_| "artifacts.ndjson contains invalid artifact_id (redacted)".to_string())?;
-        if !rec.proof_tokens.is_empty() {
-            out.insert(artifact_id, rec.proof_tokens);
-        }
-    }
-
-    Ok(out)
-}
-
 pub(crate) fn write_artifacts_evidence(
     path: &Path,
     artifacts: &[ArtifactRunResult],
@@ -265,20 +201,20 @@ pub(crate) fn write_artifacts_evidence(
     ensure_existing_path_components_safe(path, "artifacts evidence")?;
     let dir = path
         .parent()
-        .ok_or_else(|| "could not create artifacts evidence (redacted)".to_string())?;
+        .ok_or_else(|| "could not create artifacts evidence".to_string())?;
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| "could not create artifacts evidence (redacted)".to_string())?;
+        .ok_or_else(|| "could not create artifacts evidence".to_string())?;
     let tmp_path = dir.join(format!("{file_name}.tmp"));
     if let Ok(meta) = std::fs::symlink_metadata(&tmp_path)
         && (meta.file_type().is_symlink() || is_unsafe_reparse_point(&meta))
     {
-        return Err("could not create artifacts evidence (redacted)".to_string());
+        return Err("could not create artifacts evidence".to_string());
     }
 
     let file = std::fs::File::create(&tmp_path)
-        .map_err(|_| "could not create artifacts evidence (redacted)".to_string())?;
+        .map_err(|_| "could not create artifacts evidence".to_string())?;
     let mut writer = std::io::BufWriter::new(file);
 
     for a in artifacts {
@@ -299,72 +235,53 @@ pub(crate) fn write_artifacts_evidence(
             },
         };
         let line = serde_json::to_string(&record)
-            .map_err(|_| "could not serialize artifacts evidence record (redacted)".to_string())?;
+            .map_err(|_| "could not serialize artifacts evidence record".to_string())?;
         writer
             .write_all(line.as_bytes())
             .and_then(|_| writer.write_all(b"\n"))
-            .map_err(|_| "could not write artifacts evidence (redacted)".to_string())?;
+            .map_err(|_| "could not write artifacts evidence".to_string())?;
     }
 
     writer
         .flush()
-        .map_err(|_| "could not flush artifacts evidence (redacted)".to_string())?;
+        .map_err(|_| "could not flush artifacts evidence".to_string())?;
     let file = writer
         .into_inner()
-        .map_err(|_| "could not flush artifacts evidence (redacted)".to_string())?;
+        .map_err(|_| "could not flush artifacts evidence".to_string())?;
     file.sync_all()
-        .map_err(|_| "could not persist artifacts evidence (redacted)".to_string())?;
+        .map_err(|_| "could not persist artifacts evidence".to_string())?;
     drop(file);
     ensure_existing_path_components_safe(path, "artifacts evidence")?;
     if let Ok(meta) = std::fs::symlink_metadata(path)
         && (meta.file_type().is_symlink() || is_unsafe_reparse_point(&meta))
     {
         let _ = std::fs::remove_file(&tmp_path);
-        return Err("artifacts evidence path is unsafe (redacted)".to_string());
+        return Err("artifacts evidence path is unsafe".to_string());
     }
     std::fs::rename(&tmp_path, path)
-        .map_err(|_| "could not persist artifacts evidence (redacted)".to_string())?;
-    sync_parent_dir(path)
-        .map_err(|_| "could not persist artifacts evidence (redacted)".to_string())?;
+        .map_err(|_| "could not persist artifacts evidence".to_string())?;
+    sync_parent_dir(path).map_err(|_| "could not persist artifacts evidence".to_string())?;
     Ok(())
 }
 
-fn ext_for_artifact_type_v1(artifact_type: &str) -> &'static str {
-    match artifact_type {
-        "TEXT" => "txt",
-        "CSV" => "csv",
-        "TSV" => "tsv",
-        "JSON" => "json",
-        "NDJSON" => "ndjson",
-        "ZIP" => "ndjson",
-        "TAR" => "ndjson",
-        "EML" => "ndjson",
-        "MBOX" => "ndjson",
-        "DOCX" => "ndjson",
-        "PPTX" => "ndjson",
-        "XLSX" => "ndjson",
-        _ => "bin",
-    }
-}
-
-pub(crate) fn verification_artifact_type_v1(artifact_type: &str) -> &'static str {
-    match artifact_type {
-        "ZIP" | "TAR" | "EML" | "MBOX" | "DOCX" | "PPTX" | "XLSX" => "NDJSON",
-        "TEXT" => "TEXT",
-        "CSV" => "CSV",
-        "TSV" => "TSV",
-        "JSON" => "JSON",
-        "NDJSON" => "NDJSON",
-        _ => "FILE",
+/// Sanitized output extension for a wire artifact_type string.
+///
+/// Mirrors [`veil_domain::ArtifactType::sanitized_extension`] for the
+/// known v1 set; unrecognized values (notably the `"FILE"` placeholder
+/// emitted for unsupported types) use `"bin"`.
+pub(crate) fn sanitized_extension_for_wire(artifact_type_wire: &str) -> &'static str {
+    match veil_domain::ArtifactType::parse(artifact_type_wire) {
+        Ok(t) => t.sanitized_extension(),
+        Err(_) => "bin",
     }
 }
 
 pub(crate) fn sanitized_output_path_v1(
     sanitized_dir: &Path,
     sort_key: &veil_domain::ArtifactSortKey,
-    artifact_type: &str,
+    artifact_type_wire: &str,
 ) -> PathBuf {
-    let ext = ext_for_artifact_type_v1(artifact_type);
+    let ext = sanitized_extension_for_wire(artifact_type_wire);
     sanitized_dir.join(format!(
         "{}__{}.{}",
         sort_key.source_locator_hash, sort_key.artifact_id, ext
@@ -374,10 +291,10 @@ pub(crate) fn sanitized_output_path_v1(
 fn write_quarantine_raw(
     quarantine_raw_dir: &Path,
     sort_key: &veil_domain::ArtifactSortKey,
-    artifact_type: &str,
+    artifact_type_wire: &str,
     bytes: &[u8],
 ) -> Result<(), ()> {
-    let ext = ext_for_artifact_type_v1(artifact_type);
+    let ext = sanitized_extension_for_wire(artifact_type_wire);
     let path = quarantine_raw_dir.join(format!(
         "{}__{}.{}",
         sort_key.source_locator_hash, sort_key.artifact_id, ext
@@ -389,20 +306,18 @@ pub(crate) fn write_quarantine_raw_or_fail(
     quarantine_copy_enabled: bool,
     quarantine_raw_dir: &Path,
     sort_key: &veil_domain::ArtifactSortKey,
-    artifact_type: &str,
+    artifact_type_wire: &str,
     bytes: &[u8],
-    log_ctx: LogContext<'_>,
 ) -> Result<(), ()> {
     if !quarantine_copy_enabled {
         return Ok(());
     }
 
-    if write_quarantine_raw(quarantine_raw_dir, sort_key, artifact_type, bytes).is_err() {
-        log_error(
-            log_ctx,
-            "quarantine_raw_write_failed",
-            "INTERNAL_ERROR",
-            Some("could not persist quarantine raw copy (redacted)"),
+    if write_quarantine_raw(quarantine_raw_dir, sort_key, artifact_type_wire, bytes).is_err() {
+        tracing::error!(
+            event = "quarantine_raw_write_failed",
+            reason_code = "INTERNAL_ERROR",
+            "could not persist quarantine raw copy"
         );
         return Err(());
     }
@@ -419,39 +334,6 @@ pub(crate) fn coverage_hash_v1(coverage: veil_domain::CoverageMapV1) -> String {
         coverage.attachments.as_str()
     );
     blake3::hash(s.as_bytes()).to_hex().to_string()
-}
-
-fn action_as_str(action: &veil_policy::Action) -> &'static str {
-    match action {
-        veil_policy::Action::Redact => "REDACT",
-        veil_policy::Action::Mask { .. } => "MASK",
-        veil_policy::Action::Drop => "DROP",
-    }
-}
-
-pub(crate) fn findings_summary_rows<'a>(
-    policy: &'a veil_policy::Policy,
-    findings: &[veil_detect::Finding],
-) -> Vec<veil_evidence::ledger::FindingsSummaryRow<'a>> {
-    let mut counts = BTreeMap::<&str, u64>::new();
-    for f in findings {
-        *counts.entry(&f.class_id).or_insert(0) += 1;
-    }
-
-    let mut out = Vec::<veil_evidence::ledger::FindingsSummaryRow<'a>>::new();
-    for class in &policy.classes {
-        let count = counts.get(class.class_id.as_str()).copied().unwrap_or(0);
-        if count == 0 {
-            continue;
-        }
-        out.push(veil_evidence::ledger::FindingsSummaryRow {
-            class_id: &class.class_id,
-            severity: class.severity.as_str(),
-            action: action_as_str(&class.action),
-            count,
-        });
-    }
-    out
 }
 
 pub(crate) fn validate_or_seed_resume_meta(

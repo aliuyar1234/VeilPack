@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
-use veil_detect::{
-    StructuredSelector, class_applies, collect_match_spans, csv_selected_columns,
-    json_pointer_escape, json_pointer_matches_class, json_pointer_selection,
-};
 use veil_domain::QuarantineReasonCode;
 use veil_extract::{CanonicalArtifact, CanonicalCsv, canonicalize_json_value};
 use veil_policy::{Action, Policy};
+use veil_policy_eval::{
+    StructuredSelector, class_applies, collect_match_spans, csv_selected_columns,
+    json_pointer_escape, json_pointer_matches_class, json_pointer_selection,
+};
 
 #[derive(Debug, Clone)]
 pub enum TransformOutcome {

@@ -2,6 +2,7 @@
 members = [
   "crates/veil-domain",
   "crates/veil-policy",
+  "crates/veil-policy-eval",
   "crates/veil-extract",
   "crates/veil-detect",
   "crates/veil-transform",
@@ -11,3 +12,49 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/aliuyar1234/VeilPack"
+
+[workspace.dependencies]
+# Shared runtime deps
+blake3 = "1"
+ciborium = "0.2"
+clap = { version = "4", features = ["derive"] }
+crossbeam-channel = "0.5"
+csv = "1"
+mailparse = "0.14"
+regex = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tar = "0.4"
+tempfile = "3"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+wait-timeout = "0.2"
+zeroize = "1"
+zip = "0.6"
+
+# Internal path deps (consumed via { workspace = true } in member manifests)
+veil-detect = { path = "crates/veil-detect" }
+veil-domain = { path = "crates/veil-domain" }
+veil-evidence = { path = "crates/veil-evidence" }
+veil-extract = { path = "crates/veil-extract" }
+veil-policy = { path = "crates/veil-policy" }
+veil-policy-eval = { path = "crates/veil-policy-eval" }
+veil-transform = { path = "crates/veil-transform" }
+veil-verify = { path = "crates/veil-verify" }
+
+# Dev-only
+base64 = "0.22"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Pedantic is opt-in and tightened during Phase 5 polish — see plan.

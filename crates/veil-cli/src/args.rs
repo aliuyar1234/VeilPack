@@ -1,141 +1,118 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use clap::{Parser, Subcommand};
+
 use crate::EXIT_USAGE;
 use crate::fs_safety::{
     ensure_dir_exists, ensure_existing_path_components_safe, ensure_file_exists,
     ensure_output_fresh_or_resumable, ensure_policy_json_exists,
 };
-use crate::logging::{LogContext, log_error};
 use crate::runtime_limits::load_runtime_limits_from_json;
 
-#[derive(Debug)]
-pub(crate) struct RunArgs {
-    pub(crate) input: PathBuf,
-    pub(crate) output: PathBuf,
-    pub(crate) policy: PathBuf,
-    pub(crate) workdir: Option<PathBuf>,
-    pub(crate) max_workers: Option<u32>,
-    pub(crate) strictness: Option<String>,
-    pub(crate) enable_tokenization: bool,
-    pub(crate) secret_key_file: Option<PathBuf>,
-    pub(crate) quarantine_copy: bool,
-    pub(crate) isolate_risky_extractors: bool,
-    pub(crate) limits_json: Option<PathBuf>,
+/// Top-level Veil CLI parser.
+///
+/// Subcommands map 1:1 to the public command surface. The `extract-worker`
+/// subcommand is internal and hidden from `--help` output, but kept on the
+/// same parser so the binary handles all entry points uniformly.
+#[derive(Debug, Parser)]
+#[command(
+    name = "veil",
+    bin_name = "veil",
+    about = "Veil (offline fail-closed privacy gate)",
+    disable_help_subcommand = true
+)]
+pub(crate) struct Cli {
+    #[command(subcommand)]
+    pub(crate) command: Command,
 }
 
-pub(crate) fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
-    let mut input = None;
-    let mut output = None;
-    let mut policy = None;
-    let mut workdir = None;
-    let mut max_workers = None;
-    let mut strictness = None;
-    let mut enable_tokenization = false;
-    let mut secret_key_file = None;
-    let mut quarantine_copy = false;
-    let mut isolate_risky_extractors = false;
-    let mut limits_json = None;
+#[derive(Debug, Subcommand)]
+pub(crate) enum Command {
+    /// Process a corpus into a Veil Pack.
+    Run(RunArgs),
+    /// Verify a Veil Pack output.
+    Verify(VerifyArgs),
+    /// Policy bundle utilities.
+    Policy {
+        #[command(subcommand)]
+        cmd: PolicyCommand,
+    },
+    /// Internal: extract one artifact in an isolated worker.
+    #[command(hide = true, name = "extract-worker")]
+    ExtractWorker(crate::extract_worker::ExtractWorkerArgs),
+}
 
-    let mut i = 0;
-    while i < args.len() {
-        let a = args[i].as_str();
-        match a {
-            "--input" => {
-                i += 1;
-                input = Some(require_value(args, i, "--input")?);
-            }
-            "--output" => {
-                i += 1;
-                output = Some(require_value(args, i, "--output")?);
-            }
-            "--policy" => {
-                i += 1;
-                policy = Some(require_value(args, i, "--policy")?);
-            }
-            "--workdir" => {
-                i += 1;
-                workdir = Some(require_value(args, i, "--workdir")?);
-            }
-            "--max-workers" => {
-                i += 1;
-                let raw: PathBuf = require_value(args, i, "--max-workers")?;
-                let raw = raw
-                    .to_str()
-                    .ok_or_else(|| "--max-workers must be a UTF-8 number".to_string())?;
-                let parsed: u32 = raw
-                    .parse()
-                    .map_err(|_| "--max-workers must be a positive integer".to_string())?;
-                if parsed == 0 {
-                    return Err("--max-workers must be >= 1".to_string());
-                }
-                max_workers = Some(parsed);
-            }
-            "--strictness" => {
-                i += 1;
-                let raw: PathBuf = require_value(args, i, "--strictness")?;
-                let raw = raw
-                    .to_str()
-                    .ok_or_else(|| "--strictness must be UTF-8".to_string())?;
-                strictness = Some(raw.to_string());
-            }
-            "--enable-tokenization" => {
-                i += 1;
-                let raw: PathBuf = require_value(args, i, "--enable-tokenization")?;
-                let raw = raw
-                    .to_str()
-                    .ok_or_else(|| "--enable-tokenization must be 'true' or 'false'".to_string())?;
-                enable_tokenization = parse_bool_flag("--enable-tokenization", raw)?;
-            }
-            "--secret-key-file" => {
-                i += 1;
-                secret_key_file = Some(require_value(args, i, "--secret-key-file")?);
-            }
-            "--quarantine-copy" => {
-                i += 1;
-                let raw: PathBuf = require_value(args, i, "--quarantine-copy")?;
-                let raw = raw
-                    .to_str()
-                    .ok_or_else(|| "--quarantine-copy must be 'true' or 'false'".to_string())?;
-                quarantine_copy = parse_bool_flag("--quarantine-copy", raw)?;
-            }
-            "--isolate-risky-extractors" => {
-                i += 1;
-                let raw: PathBuf = require_value(args, i, "--isolate-risky-extractors")?;
-                let raw = raw.to_str().ok_or_else(|| {
-                    "--isolate-risky-extractors must be 'true' or 'false'".to_string()
-                })?;
-                isolate_risky_extractors = parse_bool_flag("--isolate-risky-extractors", raw)?;
-            }
-            "--limits-json" => {
-                i += 1;
-                limits_json = Some(require_value(args, i, "--limits-json")?);
-            }
-            unknown if unknown.starts_with("--") => {
-                let _ = unknown;
-                return Err("unknown flag (redacted)".to_string());
-            }
-            other => {
-                let _ = other;
-                return Err("unexpected argument (redacted)".to_string());
-            }
-        }
-        i += 1;
-    }
+#[derive(Debug, Subcommand)]
+pub(crate) enum PolicyCommand {
+    /// Validate policy bundle and compute policy_id.
+    Lint(PolicyLintArgs),
+}
 
-    Ok(RunArgs {
-        input: input.ok_or_else(|| "missing required flag: --input".to_string())?,
-        output: output.ok_or_else(|| "missing required flag: --output".to_string())?,
-        policy: policy.ok_or_else(|| "missing required flag: --policy".to_string())?,
-        workdir,
-        max_workers,
-        strictness,
-        enable_tokenization,
-        secret_key_file,
-        quarantine_copy,
-        isolate_risky_extractors,
-        limits_json,
-    })
+#[derive(Debug, clap::Args)]
+#[command(about = "Process a corpus into a Veil Pack")]
+pub(crate) struct RunArgs {
+    /// Input corpus root (read-only).
+    #[arg(long)]
+    pub(crate) input: PathBuf,
+    /// Output Veil Pack root (new: must not exist or be empty; resume: must be an in-progress pack).
+    #[arg(long)]
+    pub(crate) output: PathBuf,
+    /// Policy bundle directory.
+    #[arg(long)]
+    pub(crate) policy: PathBuf,
+    /// Work directory (default: <output>/.veil_work/).
+    #[arg(long)]
+    pub(crate) workdir: Option<PathBuf>,
+    /// Worker bound (>= 1). N=1 runs serially (byte-identical to the
+    /// pre-Phase-4 baseline). N > 1 runs the pure pipeline in parallel
+    /// while a single committer thread applies side-effects in
+    /// `ArtifactSortKey` order so output is deterministic regardless of
+    /// worker count.
+    #[arg(long, value_parser = parse_max_workers)]
+    pub(crate) max_workers: Option<u32>,
+    /// Strictness baseline. v1 only accepts `strict`.
+    #[arg(long)]
+    pub(crate) strictness: Option<String>,
+    /// Enable token-mask outputs. Accepts the literal `true` or `false`.
+    /// Default: false.
+    #[arg(
+        long,
+        value_name = "BOOL",
+        value_parser = parse_bool_flag,
+        default_value = "false",
+        num_args = 1,
+        action = clap::ArgAction::Set,
+    )]
+    pub(crate) enable_tokenization: bool,
+    /// Required if tokenization is enabled.
+    #[arg(long)]
+    pub(crate) secret_key_file: Option<PathBuf>,
+    /// Persist a raw copy of every quarantined artifact. Accepts `true` or
+    /// `false`. Default: false.
+    #[arg(
+        long,
+        value_name = "BOOL",
+        value_parser = parse_bool_flag,
+        default_value = "false",
+        num_args = 1,
+        action = clap::ArgAction::Set,
+    )]
+    pub(crate) quarantine_copy: bool,
+    /// Run risky extractors (zip/tar/eml/mbox/ooxml) in an isolated worker.
+    /// Accepts `true` or `false`. Default: false.
+    #[arg(
+        long,
+        value_name = "BOOL",
+        value_parser = parse_bool_flag,
+        default_value = "false",
+        num_args = 1,
+        action = clap::ArgAction::Set,
+    )]
+    pub(crate) isolate_risky_extractors: bool,
+    /// Optional JSON file overriding safety limits.
+    #[arg(long)]
+    pub(crate) limits_json: Option<PathBuf>,
 }
 
 pub(crate) fn validate_run_args(args: &RunArgs) -> Result<(), String> {
@@ -154,7 +131,7 @@ pub(crate) fn validate_run_args(args: &RunArgs) -> Result<(), String> {
     if let Ok(meta) = std::fs::metadata(&workdir)
         && !meta.is_dir()
     {
-        return Err("workdir path must be a directory when it exists (redacted)".to_string());
+        return Err("workdir path must be a directory when it exists".to_string());
     }
 
     if let Some(strictness) = &args.strictness
@@ -183,44 +160,15 @@ pub(crate) fn validate_run_args(args: &RunArgs) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, clap::Args)]
+#[command(about = "Verify a Veil Pack output")]
 pub(crate) struct VerifyArgs {
+    /// Existing Veil Pack root.
+    #[arg(long)]
     pub(crate) pack: PathBuf,
+    /// Policy bundle directory.
+    #[arg(long)]
     pub(crate) policy: PathBuf,
-}
-
-pub(crate) fn parse_verify_args(args: &[String]) -> Result<VerifyArgs, String> {
-    let mut pack = None;
-    let mut policy = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        let a = args[i].as_str();
-        match a {
-            "--pack" => {
-                i += 1;
-                pack = Some(require_value(args, i, "--pack")?);
-            }
-            "--policy" => {
-                i += 1;
-                policy = Some(require_value(args, i, "--policy")?);
-            }
-            unknown if unknown.starts_with("--") => {
-                let _ = unknown;
-                return Err("unknown flag (redacted)".to_string());
-            }
-            other => {
-                let _ = other;
-                return Err("unexpected argument (redacted)".to_string());
-            }
-        }
-        i += 1;
-    }
-
-    Ok(VerifyArgs {
-        pack: pack.ok_or_else(|| "missing required flag: --pack".to_string())?,
-        policy: policy.ok_or_else(|| "missing required flag: --policy".to_string())?,
-    })
 }
 
 pub(crate) fn validate_verify_args(args: &VerifyArgs) -> Result<(), String> {
@@ -231,37 +179,12 @@ pub(crate) fn validate_verify_args(args: &VerifyArgs) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, clap::Args)]
+#[command(about = "Validate policy bundle and compute policy_id")]
 pub(crate) struct PolicyLintArgs {
+    /// Policy bundle directory.
+    #[arg(long)]
     pub(crate) policy: PathBuf,
-}
-
-pub(crate) fn parse_policy_lint_args(args: &[String]) -> Result<PolicyLintArgs, String> {
-    let mut policy = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        let a = args[i].as_str();
-        match a {
-            "--policy" => {
-                i += 1;
-                policy = Some(require_value(args, i, "--policy")?);
-            }
-            unknown if unknown.starts_with("--") => {
-                let _ = unknown;
-                return Err("unknown flag (redacted)".to_string());
-            }
-            other => {
-                let _ = other;
-                return Err("unexpected argument (redacted)".to_string());
-            }
-        }
-        i += 1;
-    }
-
-    Ok(PolicyLintArgs {
-        policy: policy.ok_or_else(|| "missing required flag: --policy".to_string())?,
-    })
 }
 
 pub(crate) fn validate_policy_lint_args(args: &PolicyLintArgs) -> Result<(), String> {
@@ -270,26 +193,34 @@ pub(crate) fn validate_policy_lint_args(args: &PolicyLintArgs) -> Result<(), Str
     Ok(())
 }
 
-pub(crate) fn require_value(args: &[String], i: usize, flag: &str) -> Result<PathBuf, String> {
-    let value = args
-        .get(i)
-        .ok_or_else(|| format!("missing value for {flag}"))?;
-    if value.starts_with("--") {
-        return Err(format!("missing value for {flag}"));
-    }
-    Ok(PathBuf::from(value))
-}
-
-fn parse_bool_flag(flag: &str, value: &str) -> Result<bool, String> {
+/// Custom value parser preserving the exact `true`/`false` semantics of
+/// the legacy hand-rolled parser. Anything else is a usage error.
+fn parse_bool_flag(value: &str) -> Result<bool, String> {
     match value {
         "true" => Ok(true),
         "false" => Ok(false),
-        _ => Err(format!("{flag} must be 'true' or 'false'")),
+        _ => Err("must be 'true' or 'false'".to_string()),
     }
 }
 
+/// Parse `--max-workers` as a positive `u32`. Zero is rejected.
+fn parse_max_workers(value: &str) -> Result<u32, String> {
+    let n: u32 = value
+        .parse()
+        .map_err(|_| "must be a positive integer".to_string())?;
+    if n == 0 {
+        return Err(">= 1".to_string());
+    }
+    Ok(n)
+}
+
 pub(crate) fn exit_usage(exe: &str, message: &str, help: fn(&str)) -> ExitCode {
-    log_error(LogContext::unknown(), "usage_error", "USAGE", Some(message));
+    tracing::error!(
+        event = "usage_error",
+        reason_code = "USAGE",
+        detail = message,
+        "usage error"
+    );
     help(exe);
     ExitCode::from(EXIT_USAGE)
 }

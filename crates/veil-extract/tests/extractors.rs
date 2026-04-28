@@ -1,5 +1,5 @@
 use veil_domain::{
-    CoverageStatus, QuarantineReasonCode, hash_artifact_id, hash_source_locator_hash,
+    ArtifactType, CoverageStatus, QuarantineReasonCode, hash_artifact_id, hash_source_locator_hash,
 };
 use veil_extract::{ArtifactContext, CanonicalArtifact, ExtractOutcome, ExtractorRegistry};
 
@@ -18,7 +18,7 @@ fn text_utf8_extracts_with_full_coverage() {
         source_locator_hash: &source_locator_hash,
     };
 
-    let out = reg.extract_by_type("TEXT", ctx, b"hello");
+    let out = reg.extract(ArtifactType::Text, ctx, b"hello");
     let ExtractOutcome::Extracted {
         canonical,
         coverage,
@@ -50,7 +50,7 @@ fn text_non_utf8_quarantines() {
         source_locator_hash: &source_locator_hash,
     };
 
-    let out = reg.extract_by_type("TEXT", ctx, &[0xff]);
+    let out = reg.extract(ArtifactType::Text, ctx, &[0xff]);
     let ExtractOutcome::Quarantined { reason, .. } = out else {
         panic!("expected quarantined");
     };
@@ -66,7 +66,7 @@ fn csv_extracts_headers_and_records() {
         source_locator_hash: &source_locator_hash,
     };
 
-    let out = reg.extract_by_type("CSV", ctx, b"a,b\n1,2\n");
+    let out = reg.extract(ArtifactType::Csv, ctx, b"a,b\n1,2\n");
     let ExtractOutcome::Extracted {
         canonical,
         coverage,
@@ -96,7 +96,7 @@ fn tsv_extracts_headers_and_records() {
         source_locator_hash: &source_locator_hash,
     };
 
-    let out = reg.extract_by_type("TSV", ctx, b"a\tb\n1\t2\n");
+    let out = reg.extract(ArtifactType::Tsv, ctx, b"a\tb\n1\t2\n");
     let ExtractOutcome::Extracted {
         canonical,
         coverage,
@@ -126,7 +126,7 @@ fn json_is_canonicalized() {
         source_locator_hash: &source_locator_hash,
     };
 
-    let out = reg.extract_by_type("JSON", ctx, br#"{"b":2,"a":1}"#);
+    let out = reg.extract(ArtifactType::Json, ctx, br#"{"b":2,"a":1}"#);
     let ExtractOutcome::Extracted { canonical, .. } = out else {
         panic!("expected extracted");
     };
@@ -147,7 +147,11 @@ fn ndjson_is_canonicalized_per_record() {
         source_locator_hash: &source_locator_hash,
     };
 
-    let out = reg.extract_by_type("NDJSON", ctx, b"{\"b\":2,\"a\":1}\n{\"z\":0,\"y\":1}\n");
+    let out = reg.extract(
+        ArtifactType::Ndjson,
+        ctx,
+        b"{\"b\":2,\"a\":1}\n{\"z\":0,\"y\":1}\n",
+    );
     let ExtractOutcome::Extracted { canonical, .. } = out else {
         panic!("expected extracted");
     };
@@ -162,19 +166,11 @@ fn ndjson_is_canonicalized_per_record() {
 }
 
 #[test]
-fn unsupported_type_quarantines() {
-    let reg = ExtractorRegistry::default();
-    let (artifact_id, source_locator_hash) = ctx();
-    let ctx = ArtifactContext {
-        artifact_id: &artifact_id,
-        source_locator_hash: &source_locator_hash,
-    };
-
-    let out = reg.extract_by_type("FILE", ctx, b"raw");
-    let ExtractOutcome::Quarantined { reason, .. } = out else {
-        panic!("expected quarantined");
-    };
-    assert_eq!(reason, QuarantineReasonCode::UnsupportedFormat);
+fn unsupported_type_string_is_rejected_at_parse() {
+    // ArtifactType::parse rejects unsupported strings before they ever reach
+    // the registry. The "FILE" wire value was the legacy escape hatch for
+    // unsupported types and now fails closed at the type boundary.
+    assert!(ArtifactType::parse("FILE").is_err());
 }
 
 #[test]
@@ -186,7 +182,7 @@ fn csv_inconsistent_columns_quarantines_parse_error() {
         source_locator_hash: &source_locator_hash,
     };
 
-    let out = reg.extract_by_type("CSV", ctx, b"a,b\n1\n");
+    let out = reg.extract(ArtifactType::Csv, ctx, b"a,b\n1\n");
     let ExtractOutcome::Quarantined { reason, .. } = out else {
         panic!("expected quarantined");
     };
@@ -202,7 +198,7 @@ fn ndjson_invalid_record_quarantines_parse_error() {
         source_locator_hash: &source_locator_hash,
     };
 
-    let out = reg.extract_by_type("NDJSON", ctx, b"{\"a\":1}\n{not-json}\n");
+    let out = reg.extract(ArtifactType::Ndjson, ctx, b"{\"a\":1}\n{not-json}\n");
     let ExtractOutcome::Quarantined { reason, .. } = out else {
         panic!("expected quarantined");
     };

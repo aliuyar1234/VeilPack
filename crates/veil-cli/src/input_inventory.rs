@@ -8,7 +8,22 @@ pub(crate) struct DiscoveredArtifact {
     pub(crate) sort_key: veil_domain::ArtifactSortKey,
     pub(crate) path: PathBuf,
     pub(crate) size_bytes: u64,
-    pub(crate) artifact_type: String,
+    /// `None` for files Veil does not have a v1 extractor for; those are
+    /// quarantined immediately as `UNSUPPORTED_FORMAT`. On-disk the
+    /// `artifact_type` field is recorded as `"FILE"` for unsupported files
+    /// (see [`DiscoveredArtifact::artifact_type_wire`]).
+    pub(crate) artifact_type: Option<veil_domain::ArtifactType>,
+}
+
+impl DiscoveredArtifact {
+    /// Wire-format `artifact_type` field as written to ledger and evidence
+    /// records. Unsupported files are recorded as `"FILE"`.
+    pub(crate) fn artifact_type_wire(&self) -> &'static str {
+        match self.artifact_type {
+            Some(t) => t.as_str(),
+            None => "FILE",
+        }
+    }
 }
 
 pub(crate) struct EnumeratedCorpus {
@@ -34,16 +49,16 @@ fn collect_input_files(
     corpus_hasher: &mut blake3::Hasher,
 ) -> Result<(), String> {
     let read_dir = std::fs::read_dir(current)
-        .map_err(|_| "input corpus directory is not readable (redacted)".to_string())?;
+        .map_err(|_| "input corpus directory is not readable".to_string())?;
 
     let mut entries = Vec::new();
     for entry in read_dir {
-        let entry = entry
-            .map_err(|_| "input corpus directory entry could not be read (redacted)".to_string())?;
+        let entry =
+            entry.map_err(|_| "input corpus directory entry could not be read".to_string())?;
         let name = entry
             .file_name()
             .to_str()
-            .ok_or_else(|| "input corpus contains a non-UTF-8 path (redacted)".to_string())?
+            .ok_or_else(|| "input corpus contains a non-UTF-8 path".to_string())?
             .to_string();
         entries.push((name, entry));
     }
@@ -52,9 +67,9 @@ fn collect_input_files(
     for (_, entry) in entries {
         let path = entry.path();
         let meta = std::fs::symlink_metadata(&path)
-            .map_err(|_| "input corpus entry type could not be read (redacted)".to_string())?;
+            .map_err(|_| "input corpus entry type could not be read".to_string())?;
         if meta.file_type().is_symlink() || is_unsafe_reparse_point(&meta) {
-            return Err("input corpus contains an unsafe path (symlink) (redacted)".to_string());
+            return Err("input corpus contains an unsafe path (symlink)".to_string());
         }
 
         if meta.is_dir() {
@@ -65,7 +80,7 @@ fn collect_input_files(
         if meta.is_file() {
             let rel = path
                 .strip_prefix(root)
-                .map_err(|_| "input corpus path normalization failed (redacted)".to_string())?;
+                .map_err(|_| "input corpus path normalization failed".to_string())?;
             let normalized_rel_path = normalize_rel_path(rel)?;
             let source_locator_hash = veil_domain::hash_source_locator_hash(&normalized_rel_path);
 
@@ -74,24 +89,21 @@ fn collect_input_files(
             let path_len: u32 = path_bytes
                 .len()
                 .try_into()
-                .map_err(|_| "input corpus path is too long (redacted)".to_string())?;
+                .map_err(|_| "input corpus path is too long".to_string())?;
             corpus_hasher.update(&path_len.to_le_bytes());
             corpus_hasher.update(path_bytes);
             corpus_hasher.update(&size_bytes.to_le_bytes());
 
             let artifact_id = hash_file_artifact_id_and_update(&path, corpus_hasher)?;
 
-            let artifact_type = classify_artifact_type(&path);
             out.push(DiscoveredArtifact {
                 sort_key: veil_domain::ArtifactSortKey::new(artifact_id, source_locator_hash),
+                artifact_type: classify_artifact_type(&path),
                 path,
                 size_bytes,
-                artifact_type,
             });
         } else {
-            return Err(
-                "input corpus contains an unsupported filesystem entry (redacted)".to_string(),
-            );
+            return Err("input corpus contains an unsupported filesystem entry".to_string());
         }
     }
 
@@ -104,15 +116,13 @@ fn normalize_rel_path(rel: &Path) -> Result<String, String> {
         let name = match comp {
             std::path::Component::Normal(os) => os,
             _ => {
-                return Err(
-                    "input corpus path is not a normalized relative path (redacted)".to_string(),
-                );
+                return Err("input corpus path is not a normalized relative path".to_string());
             }
         };
 
         let name = name
             .to_str()
-            .ok_or_else(|| "input corpus contains a non-UTF-8 path (redacted)".to_string())?;
+            .ok_or_else(|| "input corpus contains a non-UTF-8 path".to_string())?;
         if i > 0 {
             out.push('/');
         }
@@ -125,15 +135,15 @@ fn hash_file_artifact_id_and_update(
     path: &Path,
     corpus_hasher: &mut blake3::Hasher,
 ) -> Result<veil_domain::ArtifactId, String> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|_| "input artifact is not readable (redacted)".to_string())?;
+    let mut file =
+        std::fs::File::open(path).map_err(|_| "input artifact is not readable".to_string())?;
 
     let mut hasher = blake3::Hasher::new();
     let mut buf = [0_u8; 64 * 1024];
     loop {
         let n = file
             .read(&mut buf)
-            .map_err(|_| "input artifact could not be read (redacted)".to_string())?;
+            .map_err(|_| "input artifact could not be read".to_string())?;
         if n == 0 {
             break;
         }
@@ -202,24 +212,23 @@ pub(crate) fn read_artifact_bytes_for_processing(
     Ok(out)
 }
 
-pub(crate) fn classify_artifact_type(path: &Path) -> String {
+pub(crate) fn classify_artifact_type(path: &Path) -> Option<veil_domain::ArtifactType> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    match ext.to_ascii_lowercase().as_str() {
-        "txt" => "TEXT",
-        "csv" => "CSV",
-        "tsv" => "TSV",
-        "json" => "JSON",
-        "ndjson" => "NDJSON",
-        "zip" => "ZIP",
-        "tar" => "TAR",
-        "eml" => "EML",
-        "mbox" => "MBOX",
-        "docx" => "DOCX",
-        "pptx" => "PPTX",
-        "xlsx" => "XLSX",
-        _ => "FILE",
-    }
-    .to_string()
+    Some(match ext.to_ascii_lowercase().as_str() {
+        "txt" => veil_domain::ArtifactType::Text,
+        "csv" => veil_domain::ArtifactType::Csv,
+        "tsv" => veil_domain::ArtifactType::Tsv,
+        "json" => veil_domain::ArtifactType::Json,
+        "ndjson" => veil_domain::ArtifactType::Ndjson,
+        "zip" => veil_domain::ArtifactType::Zip,
+        "tar" => veil_domain::ArtifactType::Tar,
+        "eml" => veil_domain::ArtifactType::Eml,
+        "mbox" => veil_domain::ArtifactType::Mbox,
+        "docx" => veil_domain::ArtifactType::Docx,
+        "pptx" => veil_domain::ArtifactType::Pptx,
+        "xlsx" => veil_domain::ArtifactType::Xlsx,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

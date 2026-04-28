@@ -1,26 +1,42 @@
 [package]
 name = "veil-cli"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-blake3 = "1"
-zeroize = "1"
-veil-domain = { path = "../veil-domain" }
-veil-detect = { path = "../veil-detect" }
-veil-evidence = { path = "../veil-evidence" }
-veil-extract = { path = "../veil-extract" }
-veil-policy = { path = "../veil-policy" }
-veil-transform = { path = "../veil-transform" }
-veil-verify = { path = "../veil-verify" }
+serde.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+zeroize.workspace = true
+veil-domain.workspace = true
+veil-detect.workspace = true
+veil-evidence.workspace = true
+veil-extract.workspace = true
+veil-policy.workspace = true
+veil-transform.workspace = true
+veil-verify.workspace = true
+
+# Phase 0: workspace deps loaded but not yet wired.
+# Subsequent phases will start consuming these.
+clap = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tempfile = { workspace = true }
+wait-timeout = { workspace = true }
+crossbeam-channel = { workspace = true }
+ciborium = { workspace = true }
 
 [dev-dependencies]
-base64 = "0.22"
-tar = "0.4"
-zip = "0.6"
+base64.workspace = true
+tar.workspace = true
+zip.workspace = true
 
 [[bin]]
 name = "veil"
 path = "src/main.rs"
+
+[lints]
+workspace = true

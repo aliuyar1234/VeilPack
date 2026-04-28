@@ -166,7 +166,9 @@ Important `run` flags:
 - `--quarantine-copy true|false` to retain raw quarantined bytes under `quarantine/raw/`.
 - `--enable-tokenization true|false` with `--secret-key-file <PATH>` for opt-in tokenization.
 - `--strictness strict` because strict is the only supported baseline in `policy.v1`.
-- `--max-workers <N>` is accepted, but values greater than `1` currently emit `CONFIG_IGNORED` and still execute deterministically in single-worker mode.
+- `--max-workers <N>` selects the number of concurrent extraction workers (default: `1`). Output is byte-identical regardless of `N` — artifacts commit in deterministic sort-key order via a bounded crossbeam-channel pool.
+
+For operator-level diagnostics, set `RUST_LOG=debug` (or `RUST_LOG=trace`). All log lines are emitted as structured JSON on stderr with stable `event=` codes for downstream observability.
 
 ## What a Veil Pack contains
 

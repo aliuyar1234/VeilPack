@@ -4,18 +4,18 @@ use serde::Serialize;
 
 pub(crate) fn ensure_dir_exists(path: &Path, kind: &str) -> Result<(), String> {
     let meta = std::fs::metadata(path)
-        .map_err(|_| format!("{kind} path does not exist or is not accessible (redacted)"))?;
+        .map_err(|_| format!("{kind} path does not exist or is not accessible"))?;
     if !meta.is_dir() {
-        return Err(format!("{kind} path must be a directory (redacted)"));
+        return Err(format!("{kind} path must be a directory"));
     }
     Ok(())
 }
 
 pub(crate) fn ensure_file_exists(path: &Path, kind: &str) -> Result<(), String> {
     let meta = std::fs::metadata(path)
-        .map_err(|_| format!("{kind} path does not exist or is not accessible (redacted)"))?;
+        .map_err(|_| format!("{kind} path does not exist or is not accessible"))?;
     if !meta.is_file() {
-        return Err(format!("{kind} path must be a file (redacted)"));
+        return Err(format!("{kind} path must be a file"));
     }
     Ok(())
 }
@@ -47,14 +47,12 @@ pub(crate) fn ensure_existing_path_components_safe(path: &Path, kind: &str) -> R
         match std::fs::symlink_metadata(&cur) {
             Ok(meta) => {
                 if meta.file_type().is_symlink() || is_unsafe_reparse_point(&meta) {
-                    return Err(format!(
-                        "{kind} path points to an unsafe location (redacted)"
-                    ));
+                    return Err(format!("{kind} path points to an unsafe location"));
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => {
-                return Err(format!("{kind} path is not accessible (redacted)"));
+                return Err(format!("{kind} path is not accessible"));
             }
         }
     }
@@ -63,10 +61,9 @@ pub(crate) fn ensure_existing_path_components_safe(path: &Path, kind: &str) -> R
 
 pub(crate) fn ensure_existing_file_safe(path: &Path, kind: &str) -> Result<(), String> {
     ensure_existing_path_components_safe(path, kind)?;
-    let meta = std::fs::symlink_metadata(path)
-        .map_err(|_| format!("{kind} is not accessible (redacted)"))?;
+    let meta = std::fs::symlink_metadata(path).map_err(|_| format!("{kind} is not accessible"))?;
     if meta.file_type().is_symlink() || is_unsafe_reparse_point(&meta) || !meta.is_file() {
-        return Err(format!("{kind} path is unsafe (redacted)"));
+        return Err(format!("{kind} path is unsafe"));
     }
     Ok(())
 }
@@ -122,61 +119,51 @@ pub(crate) fn ensure_output_fresh_or_resumable(
     match std::fs::metadata(output) {
         Ok(meta) => {
             if !meta.is_dir() {
-                return Err("output path must be a directory when it exists (redacted)".to_string());
+                return Err("output path must be a directory when it exists".to_string());
             }
 
-            let mut entries = std::fs::read_dir(output)
-                .map_err(|_| "output path is not readable (redacted)".to_string())?;
+            let mut entries =
+                std::fs::read_dir(output).map_err(|_| "output path is not readable".to_string())?;
             if entries.next().is_none() {
                 return Ok(());
             }
 
             let marker_path = workdir.join("in_progress.marker");
-            let marker_meta = std::fs::metadata(&marker_path).map_err(|_| {
-                "output directory must be empty or resumable (redacted)".to_string()
-            })?;
+            let marker_meta = std::fs::metadata(&marker_path)
+                .map_err(|_| "output directory must be empty or resumable".to_string())?;
             if !marker_meta.is_file() {
-                return Err(
-                    "output directory contains an invalid in-progress marker (redacted)"
-                        .to_string(),
-                );
+                return Err("output directory contains an invalid in-progress marker".to_string());
             }
 
             let ledger_path = output.join("evidence").join("ledger.sqlite3");
             let ledger_meta = std::fs::metadata(&ledger_path).map_err(|_| {
-                "output directory must be empty or resumable (missing ledger) (redacted)"
-                    .to_string()
+                "output directory must be empty or resumable (missing ledger)".to_string()
             })?;
             if !ledger_meta.is_file() {
-                return Err("ledger.sqlite3 must be a file (redacted)".to_string());
+                return Err("ledger.sqlite3 must be a file".to_string());
             }
 
             let raw_dir = output.join("quarantine").join("raw");
             let raw_present = raw_dir.exists();
             if raw_present != quarantine_copy_enabled {
-                return Err(
-                    "cannot resume with different --quarantine-copy setting (redacted)".to_string(),
-                );
+                return Err("cannot resume with different --quarantine-copy setting".to_string());
             }
 
             let pack_manifest_path = output.join("pack_manifest.json");
             if let Ok(meta) = std::fs::symlink_metadata(&pack_manifest_path) {
                 if meta.file_type().is_symlink() || is_unsafe_reparse_point(&meta) {
                     return Err(
-                        "output directory contains an unsafe pack manifest path (redacted)"
-                            .to_string(),
+                        "output directory contains an unsafe pack manifest path".to_string()
                     );
                 }
                 if meta.is_file() {
-                    return Err(
-                        "output directory already contains a completed pack (redacted)".to_string(),
-                    );
+                    return Err("output directory already contains a completed pack".to_string());
                 }
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => {
-            return Err("output path is not accessible (redacted)".to_string());
+            return Err("output path is not accessible".to_string());
         }
     }
     Ok(())
@@ -187,15 +174,15 @@ pub(crate) fn ensure_dir_exists_or_create(path: &Path, kind: &str) -> Result<(),
     match std::fs::metadata(path) {
         Ok(meta) => {
             if !meta.is_dir() {
-                return Err(format!("{kind} path must be a directory (redacted)"));
+                return Err(format!("{kind} path must be a directory"));
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             std::fs::create_dir_all(path)
-                .map_err(|_| format!("{kind} path could not be created (redacted)"))?;
+                .map_err(|_| format!("{kind} path could not be created"))?;
         }
         Err(_) => {
-            return Err(format!("{kind} path is not accessible (redacted)"));
+            return Err(format!("{kind} path is not accessible"));
         }
     }
     Ok(())

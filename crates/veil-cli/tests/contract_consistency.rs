@@ -161,7 +161,10 @@ fn pack_layout_v1_contains_required_paths() {
         &std::fs::read(output.join("pack_manifest.json")).expect("read pack_manifest.json"),
     )
     .expect("parse pack_manifest.json");
-    assert_eq!(pack_manifest.pack_schema_version, "pack.v1");
+    assert_eq!(
+        pack_manifest.pack_schema_version,
+        veil_evidence::PackSchemaVersion::CURRENT.as_str()
+    );
     assert!(!pack_manifest.tool_version.is_empty());
     assert!(!pack_manifest.run_id.is_empty());
     assert!(!pack_manifest.policy_id.is_empty());

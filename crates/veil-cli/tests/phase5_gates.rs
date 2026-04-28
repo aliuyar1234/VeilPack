@@ -151,7 +151,7 @@ fn make_zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
 
 fn make_tar_bytes(path: &str, data: &[u8]) -> Vec<u8> {
     // Minimal ustar tar with one regular file entry.
-    assert!(path.as_bytes().len() <= 100);
+    assert!(path.len() <= 100);
 
     let mut header = [0_u8; 512];
     header[..path.len()].copy_from_slice(path.as_bytes());
@@ -188,9 +188,9 @@ fn make_tar_bytes(path: &str, data: &[u8]) -> Vec<u8> {
     out.extend_from_slice(data);
 
     let pad = (512 - (data.len() % 512)) % 512;
-    out.extend(std::iter::repeat(0_u8).take(pad));
+    out.extend(std::iter::repeat_n(0_u8, pad));
     // two zero blocks
-    out.extend(std::iter::repeat(0_u8).take(1024));
+    out.extend(std::iter::repeat_n(0_u8, 1024));
     out
 }
 
@@ -375,16 +375,20 @@ fn runbook_quickstart_end_to_end() {
 }
 
 #[test]
-fn resume_fails_closed_on_invalid_existing_artifacts_evidence() {
-    let input = TestDir::new("resume_invalid_evidence_input");
+fn resume_fails_closed_on_corrupt_ledger_db() {
+    // Pack v2 changed the source of truth for resume from
+    // `evidence/artifacts.ndjson` to the ledger SQLite DB. A corrupted
+    // ledger must still fail closed; a corrupted NDJSON is now a transient
+    // artifact that finalize rewrites cleanly.
+    let input = TestDir::new("resume_corrupt_ledger_input");
     std::fs::write(input.join("a.txt"), "SECRET A").expect("write a.txt");
     std::fs::write(input.join("b.txt"), "SECRET B").expect("write b.txt");
 
-    let policy = TestDir::new("resume_invalid_evidence_policy");
+    let policy = TestDir::new("resume_corrupt_ledger_policy");
     std::fs::write(policy.join("policy.json"), minimal_policy_json("SECRET"))
         .expect("write policy.json");
 
-    let output = TestDir::new("resume_invalid_evidence_output");
+    let output = TestDir::new("resume_corrupt_ledger_output");
     let out = veil_cmd()
         .env("VEIL_FAILPOINT", "after_first_verified")
         .arg("run")
@@ -398,8 +402,8 @@ fn resume_fails_closed_on_invalid_existing_artifacts_evidence() {
         .expect("run veil run (crash)");
     assert_eq!(out.status.code(), Some(1));
 
-    let artifacts_path = output.path().join("evidence").join("artifacts.ndjson");
-    std::fs::write(&artifacts_path, "{not-json\n").expect("write invalid artifacts.ndjson");
+    let ledger_path = output.path().join("evidence").join("ledger.sqlite3");
+    std::fs::write(&ledger_path, b"not a valid sqlite database").expect("corrupt ledger");
 
     let resumed = veil_cmd()
         .arg("run")

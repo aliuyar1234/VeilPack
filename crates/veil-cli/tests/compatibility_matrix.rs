@@ -115,7 +115,7 @@ fn verify_enforces_pack_and_ledger_compatibility_matrix() {
 
     let cases = [
         Case {
-            pack_schema_version: "pack.v1",
+            pack_schema_version: veil_evidence::PackSchemaVersion::CURRENT.as_str(),
             ledger_schema_version: &current_ledger,
             expected_code: 0,
         },
@@ -125,7 +125,7 @@ fn verify_enforces_pack_and_ledger_compatibility_matrix() {
             expected_code: 1,
         },
         Case {
-            pack_schema_version: "pack.v1",
+            pack_schema_version: veil_evidence::PackSchemaVersion::CURRENT.as_str(),
             ledger_schema_version: "ledger.v0",
             expected_code: 1,
         },

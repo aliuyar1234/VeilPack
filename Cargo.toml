@@ -37,7 +37,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 wait-timeout = "0.2"
 zeroize = "1"
-zip = "0.6"
+zip = "8.6"
 
 # Internal path deps (consumed via { workspace = true } in member manifests)
 veil-detect = { path = "crates/veil-detect" }
